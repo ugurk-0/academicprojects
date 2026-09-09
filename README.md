@@ -1,2 +1,2 @@
-# academicprojects
-Display of some academic projects done during my Master's Degree
+#Internship works
+Display of the work i've done during my internship at IFPEN
