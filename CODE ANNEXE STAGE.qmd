@@ -1,0 +1,2926 @@
+---
+title: "Annexes Stage"
+format: html
+editor: visual
+---
+
+```{r}
+library(future)
+library(furrr)
+library(sensitivity)
+library(tictoc)
+library(dplyr)
+library(ggplot2)
+```
+
+## Codes du stage
+
+Chaque grande partie correspond à une simulation.
+
+## Comparatif HSIC vs Sobol
+
+### G-function
+
+```{r}
+
+plan(multisession, workers = 6)
+set.seed(443)
+gfunc_a99 <- function(xx){
+  d <- length(xx)
+  a <- (seq_len(d) -1) / 2
+  a[1] <- 99 #X1 rendu non influent
+  prod((abs(4*xx - 2) + a) / (1 + a))}
+gfunc_a99_vec <- function(X) apply(X, 1, gfunc_a99)
+
+d_grid=c(5, 10, 20)
+n_grid=c(100, 500, 1000)
+n_reps=30
+grid_rep=expand.grid(d=d_grid, n=n_grid, rep=seq_len(n_reps))
+make_samples <- function(d, n) {
+  list(
+    X  = as.data.frame(matrix(runif(n * d), nrow = n, ncol = d, dimnames = list(NULL, paste0("X", seq_len(d))))),
+    X1 = as.data.frame(matrix(runif(n * d), nrow = n, ncol = d, dimnames = list(NULL, paste0("X", seq_len(d))))),
+    X2 = as.data.frame(matrix(runif(n * d), nrow = n, ncol = d, dimnames = list(NULL, paste0("X", seq_len(d))))))}
+
+
+tic("pipeline complet")
+df_all <- future_map_dfr(seq_len(nrow(grid_rep)), function(i){
+  d=grid_rep$d[i]
+  n=grid_rep$n[i]
+  rep =grid_rep$rep[i]
+  s=make_samples(d, n)
+  #sobol
+  sob=sobol2002(model = gfunc_a99_vec, X1 = s$X1, X2 = s$X2, nboot = 0)
+  df_s1=data.frame(method = "Sobol S1", d = d, n = n, rep = rep,
+                      variable = paste0("X", seq_len(d)),
+                      value    = sob$S[, "original"])
+  df_st=data.frame(method = "Sobol ST", d = d, n = n, rep = rep,
+                      variable = paste0("X", seq_len(d)),
+                      value    = sob$T[, "original"])
+
+  #hsic
+  sensi=sensiHSIC(model= gfunc_a99_vec,
+    X = as.matrix(s$X),kernelX = "rbf",kernelY = "rbf",
+    nboot= 0,save.GM = list(KX = TRUE, KY = TRUE))
+  
+  #tests
+  pvalsperm=testHSIC(sensi = sensi,test.method = "Permutation",B=199)$pval[, "original"]
+  pvalsasymp=testHSIC(sensi = sensi, test.method ="Asymptotic",B=199)$pval[, "original"]
+
+  
+  df_hsic <- data.frame(method = "R2-HSIC", d=d, n=n, rep=rep,
+                        variable = paste0("X", seq_len(d)),
+                        value = sensi$S[, "original"])
+  df_perm <- data.frame(method = "pval_perm", d=d, n=n, rep=rep,
+                        variable = paste0("X", seq_len(d)),
+                        value = pvalsperm)
+  df_asymp <- data.frame(method = "pval_asymp", d=d, n=n, rep=rep,
+                         variable = paste0("X", seq_len(d)),
+                         value = pvalsasymp)
+  df_out <- bind_rows(df_s1, df_st, df_hsic, df_perm, df_asymp)
+  df_out}, .options = furrr_options(seed = TRUE), .progress = TRUE)
+toc()
+vars_all = unique(df_all$variable)
+ord_var = vars_all[order(as.numeric(gsub("X", "", vars_all)))]
+df_all$variable = factor(df_all$variable, levels = ord_var)
+
+```
+
+### Friedman indépendant
+
+```{r}
+
+friedman <- function(xx) {
+  10 * sin(pi * xx[1] * xx[2]) + 20 * (xx[3] - 0.5)^2 + 10 * xx[4] + 5 * xx[5]
+}
+friedman_vec <- function(X) apply(X, 1, friedman)
+plan(multisession, workers = 6)
+set.seed(443)
+gfunc_a99 <- function(xx){
+  d   <- length(xx)
+  a   <- (seq_len(d) - 1) / 2
+  a[1] <- 99          # X1 rendu non influent
+  prod((abs(4*xx - 2) + a) / (1 + a))}
+gfunc_a99_vec <- function(X) apply(X, 1, gfunc_a99)
+
+d_grid=c(6)
+n_grid=c(100, 500, 1000)
+n_reps=30
+grid_rep=expand.grid(d=d_grid, n=n_grid, rep=seq_len(n_reps))
+make_samples <- function(d, n) {
+  list(
+    X  = as.data.frame(matrix(runif(n * d), nrow = n, ncol = d, dimnames = list(NULL, paste0("X", seq_len(d))))),
+    X1 = as.data.frame(matrix(runif(n * d), nrow = n, ncol = d, dimnames = list(NULL, paste0("X", seq_len(d))))),
+    X2 = as.data.frame(matrix(runif(n * d), nrow = n, ncol = d, dimnames = list(NULL, paste0("X", seq_len(d))))))}
+
+
+tic("pipeline complet")
+df_all_friedman <- future_map_dfr(seq_len(nrow(grid_rep)), function(i){
+  d=grid_rep$d[i]
+  n=grid_rep$n[i]
+  rep =grid_rep$rep[i]
+  s=make_samples(d, n)
+  #sobol
+  sob=sobol2002(model = friedman_vec, X1 = s$X1, X2 = s$X2, nboot = 0)
+  df_s1=data.frame(method = "Sobol S1", d = d, n = n, rep = rep,
+                      variable = paste0("X", seq_len(d)),
+                      value    = sob$S[, "original"])
+  df_st=data.frame(method = "Sobol ST", d = d, n = n, rep = rep,
+                      variable = paste0("X", seq_len(d)),
+                      value    = sob$T[, "original"])
+
+  #hsic
+  sensi=sensiHSIC(model= friedman_vec,
+    X = as.matrix(s$X),kernelX = "rbf",kernelY = "rbf",
+    nboot= 0,save.GM = list(KX = TRUE, KY = TRUE))
+  
+  #tests
+  pvalsperm=testHSIC(sensi = sensi,test.method = "Permutation",B=199)$pval[, "original"]
+  pvalsasymp=testHSIC(sensi = sensi, test.method ="Asymptotic",B=199)$pval[, "original"]
+
+  
+  df_hsic <- data.frame(method = "R2-HSIC", d=d, n=n, rep=rep,
+                        variable = paste0("X", seq_len(d)),
+                        value = sensi$S[, "original"])
+  df_perm <- data.frame(method = "pval_perm", d=d, n=n, rep=rep,
+                        variable = paste0("X", seq_len(d)),
+                        value = pvalsperm)
+  df_asymp <- data.frame(method = "pval_asymp", d=d, n=n, rep=rep,
+                         variable = paste0("X", seq_len(d)),
+                         value = pvalsasymp)
+  df_out <- bind_rows(df_s1, df_st, df_hsic, df_perm, df_asymp)
+  df_out}, .options = furrr_options(seed = TRUE), .progress = TRUE)
+toc()
+vars_all = unique(df_all_friedman$variable)
+ord_var = vars_all[order(as.numeric(gsub("X", "", vars_all)))]
+df_all_friedman$variable = factor(df_all_friedman$variable, levels = ord_var)
+```
+
+### Friedman dépendant
+
+```{r}
+
+make_samples <- function(d, n, rho=0.7){
+  Sigma=diag(d)
+  Sigma[1, 3]=rho
+  Sigma[3, 1]=rho
+  X=mvrnorm(n, mu = rep(0, d), Sigma = Sigma)
+  X1=mvrnorm(n, mu = rep(0, d), Sigma = Sigma)
+  X2=mvrnorm(n, mu = rep(0, d), Sigma = Sigma)
+  colnames(X)=paste0("X", seq_len(d))
+  colnames(X1)=paste0("X", seq_len(d))
+  colnames(X2)=paste0("X", seq_len(d))
+  list(X= as.data.frame(X),X1 = as.data.frame(X1),X2 = as.data.frame(X2))}
+
+
+friedman <- function(xx) {
+  10 * sin(pi * xx[1] * xx[2]) + 20 * (xx[3] - 0.5)^2 + 10 * xx[4] + 5 * xx[5]
+}
+friedman_vec <- function(X) apply(X, 1, friedman)
+plan(multisession, workers = 6)
+set.seed(443)
+
+d_grid=c(6)
+n_grid=c(100, 500, 1000)
+n_reps=30
+grid_rep=expand.grid(d=d_grid, n=n_grid, rep=seq_len(n_reps))
+
+tic("pipeline complet")
+df_all_friedman_dep <- future_map_dfr(seq_len(nrow(grid_rep)), function(i){
+  d=grid_rep$d[i]
+  n=grid_rep$n[i]
+  rep =grid_rep$rep[i]
+  s=make_samples(d, n)
+  #sobol
+  sob=sobol2002(model = friedman_vec, X1 = s$X1, X2 = s$X2, nboot = 0)
+  df_s1=data.frame(method = "Sobol S1", d = d, n = n, rep = rep,
+                      variable = paste0("X", seq_len(d)),
+                      value    = sob$S[, "original"])
+  df_st=data.frame(method = "Sobol ST", d = d, n = n, rep = rep,
+                      variable = paste0("X", seq_len(d)),
+                      value    = sob$T[, "original"])
+
+  #hsic
+  sensi=sensiHSIC(model= friedman_vec,
+    X = as.matrix(s$X),kernelX = "rbf",kernelY = "rbf",
+    nboot= 0,save.GM = list(KX = TRUE, KY = TRUE))
+  
+  #tests
+  pvalsperm=testHSIC(sensi = sensi,test.method = "Permutation",B=199)$pval[, "original"]
+  pvalsasymp=testHSIC(sensi = sensi, test.method ="Asymptotic",B=199)$pval[, "original"]
+
+  
+  df_hsic <- data.frame(method = "R2-HSIC", d=d, n=n, rep=rep,
+                        variable = paste0("X", seq_len(d)),
+                        value = sensi$S[, "original"])
+  df_perm <- data.frame(method = "pval_perm", d=d, n=n, rep=rep,
+                        variable = paste0("X", seq_len(d)),
+                        value = pvalsperm)
+  df_asymp <- data.frame(method = "pval_asymp", d=d, n=n, rep=rep,
+                         variable = paste0("X", seq_len(d)),
+                         value = pvalsasymp)
+  df_out <- bind_rows(df_s1, df_st, df_hsic, df_perm, df_asymp)
+  df_out}, .options = furrr_options(seed = TRUE), .progress = TRUE)
+toc()
+vars_all = unique(df_all_friedman$variable)
+ord_var = vars_all[order(as.numeric(gsub("X", "", vars_all)))]
+df_all_friedman_dep$variable = factor(df_all_friedman_dep$variable, levels = ord_var)
+plan(sequential)
+```
+
+### Visualisation
+
+```{r}
+plot_sobol_d = function(dd,df_all) {
+  df_tmp = df_all %>%
+    filter(method %in% c("Sobol S1", "Sobol ST"), d == dd) %>%
+    mutate(
+      n = factor(n, levels = c(100, 500, 1000)),
+      method = factor(method, levels = c("Sobol S1", "Sobol ST"))
+    )
+  
+  ggplot(df_tmp, aes(x = variable, y = value, fill = method)) +
+    geom_boxplot(outlier.shape = NA, position = position_dodge(width = 0.7)) +
+    geom_point(
+      aes(color = method),
+      alpha = 0.5,
+      size = 1,
+      position = position_jitterdodge(jitter.width = 0.15, dodge.width = 0.7)
+    ) +
+    facet_wrap(~ n, nrow = 1, scales = "fixed") +
+    scale_fill_manual(values = c("Sobol S1" = "#1f77b4", "Sobol ST" = "#ff7f0e")) +
+    scale_color_manual(values = c("Sobol S1" = "#1f77b4", "Sobol ST" = "#ff7f0e")) +
+    labs(title = paste0("Indices de Sobol - d = ", dd),
+         x = NULL, y = "Valeur de l'indice", fill = NULL, color = NULL) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          strip.text = element_text(face = "bold"),
+          legend.position = "top")}
+
+plot_hsic_d = function(dd,df_all) {
+  df_tmp = df_all %>%
+    filter(method == "R2-HSIC", d == dd) %>%
+    mutate(n = factor(n, levels = c(100, 500, 1000)))
+  
+  ggplot(df_tmp, aes(x = variable, y = value)) +
+    geom_boxplot(outlier.shape = NA, fill = "#7570b3", alpha = 0.75) +
+    geom_point(alpha = 0.5, size = 1,
+               position = position_jitter(width = 0.15, height = 0)) +
+    facet_wrap(~ n, nrow = 1, scales = "fixed") +
+    labs(title = paste0("R²-HSIC - d = ", dd),
+         x = NULL, y = "R²-HSIC") +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          strip.text = element_text(face = "bold"))}
+
+plot_pval_boxplot <- function(dd, df_all, subtitle = "") {
+  df_all |>
+    filter(method %in% c("pval_perm", "pval_asymp"), d == dd) |>
+    mutate(
+      variable     = factor(as.character(variable),
+                            levels = paste0("X", seq_len(dd))),
+      n_label      = factor(paste0("n = ", n),
+                            levels = paste0("n = ", sort(unique(n)))),
+      method_label = factor(
+        ifelse(method == "pval_perm", "Permutation", "Asymptotique"),
+        levels = c("Permutation", "Asymptotique"))
+    ) |>
+    ggplot(aes(x = variable, y = value, fill = method_label)) +
+    geom_boxplot(linewidth = 0.3, outlier.size = 0.4,
+                 alpha = 0.85, position = position_dodge(width = 0.75)) +
+    geom_hline(yintercept = 0.05, linetype = "dashed",
+               color = "grey40", linewidth = 0.5) +
+    scale_fill_manual(values = c("Permutation"  = "#1f77b4",
+                                 "Asymptotique" = "#d62728"),
+                      name = NULL) +
+    scale_y_continuous(limits = c(0, 1), breaks = seq(0, 1, 0.2)) +
+    facet_wrap(~ n_label, nrow = 1) +
+    labs(title    = paste0("Distribution des p-valeurs HSIC - d=", D,
+                           " - 30 rép."),
+         subtitle = subtitle,
+         x = NULL, y = "p-valeur") +
+    theme_minimal(base_size = 11) +
+    theme(panel.grid.minor = element_blank(),
+          legend.position  = "top",
+          axis.text.x      = element_text(angle = 45, hjust = 1, size = 8))}
+
+#gfunc
+d_grid=c(5,10)
+for (d in d_grid){
+print(plot_sobol_d(d,df_all))
+print(plot_pval_boxplot(D=d,df_all=df_all,subtitle = "X1 est non influent"))}
+
+#friedmanind
+d_grid=6
+plot_sobol_d(6,df_all=df_all_friedman)
+plot_hsic_d(6,df_all=df_all_friedman)
+plot_pval_boxplot(D = 6, df_all = df_all_friedman,
+                  subtitle = "Friedman - X6 muet")
+
+#friedmandep
+plot_sobol_d(6,df_all=df_all_friedman_dep)
+plot_hsic_d(6,df_all=df_all_friedman_dep)
+plot_pval_boxplot(D = 6, df_all = df_all_friedman_dep,
+                  subtitle = "Friedman - X6 muet, dépendance entre X1 et X3")
+```
+
+## HSIC MARTHE
+
+### HSIC ANOVA
+
+```{r}
+setwd("C:/Users/kulu/OneDrive - ifpen.fr/Documents/Premières simulations_files")
+marthedata=read.table("marthedata.txt", header = TRUE)
+martheinput=marthedata[,1:20]
+martheoutput=marthedata[,21:30]
+
+#definition groupes
+X_all <- martheinput %>%
+  dplyr::select(per1, per2, per3, perz1, perz2, perz3, perz4,
+                d1, d2, d3, dt1, dt2, dt3,
+                kd1, kd2, kd3, poros, i1, i2, i3)
+
+group_map <- list(
+  per1 = c("per1"),
+  per2 = c("per2"),
+  per3 = c("per3"),
+  perz1 = c("perz1"),
+  perz2 = c("perz2"),
+  perz3 = c("perz3"),
+  perz4 = c("perz4"),
+  d1_group = c("d1", "dt1"),
+  d2_group = c("d2", "dt2"),
+  d3_group = c("d3", "dt3"),
+  kd1 = c("kd1"),
+  kd2 = c("kd2"),
+  kd3 = c("kd3"),
+  poros = c("poros"),
+  i_group = c("i1", "i2", "i3"))
+
+n=nrow(X_all)
+output_names=colnames(martheoutput)
+group_names=names(group_map)
+
+#Fonctions auxiliaires
+make_gramHSIC_from_list <- function(K_list) {
+  n  <- nrow(K_list[[1]])
+  p  <- length(K_list)
+  KX <- array(NA_real_, c(n, n, p))
+  for (i in seq_len(p)) KX[,,i] <- K_list[[i]]
+  obj <- list(KX = KX)
+  class(obj) <- "gramHSIC"
+  obj}
+
+#Produit de noyaux pour les groupes
+group_product_kernel <- function(KX_array, var_indices) {
+  Reduce("*", lapply(var_indices, function(i) KX_array[,,i]))}
+
+
+
+#Codes pour les graphiques
+plot_heatmap <- function(mat, titre, fill_label = "R² HSIC") {
+  df <- as.data.frame(as.table(mat))
+  colnames(df) <- c("Var", "Output", "val")
+  ggplot(df, aes(x = Output, y = Var, fill = val)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = round(val, 5)), size = 3) +
+    scale_fill_gradient(low = "white", high = "#4472C4") +
+    theme_minimal() +
+    labs(title = titre, fill = fill_label) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))}
+
+plot_pval <- function(mat, titre) {
+  df <- as.data.frame(as.table(mat))
+  colnames(df) <- c("Var", "Output", "val")
+  ggplot(df, aes(x = Output, y = Var, fill = val)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = round(val, 2)), size = 3) +
+    scale_fill_gradient2(low = "#C00000", mid = "white", high = "#CFCFCF",
+                         midpoint = 0.05) +
+    theme_minimal() +
+    labs(title = titre, fill = "p-valeur") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))}
+
+#Extraction d'une matrice résultat depuis une liste de sensiHSIC
+extract_mat <- function(res_list, slot, rownames_vec, colnames_vec) {
+  mat <- sapply(colnames_vec, function(y) res_list[[y]][[slot]][, "original"])
+  rownames(mat) <- rownames_vec
+  mat}
+
+#Test de permutation via les matrices KY sauvegardées
+perm_test_from_gram <- function(KX_group, KY, B = 200) {
+  n   <- nrow(KX_group)
+  H   <- diag(n) - matrix(1/n, n, n)
+  obs <- sum((H %*% KX_group %*% H) * (H %*% KY %*% H)) / (n - 1)^2
+  perm_vals <- replicate(B, {
+    idx <- sample(n)
+    sum((H %*% KX_group %*% H) * (H %*% KY[idx, idx] %*% H)) / (n - 1)^2
+  })
+  (sum(perm_vals >= obs) + 1) / (B + 1)}
+
+n =nrow(X_all)
+group_names=names(group_map)
+X_mat=as.matrix(X_all)
+var_names=colnames(X_all)
+
+#Indices de colonnes par groupe
+group_idx <- lapply(group_map, function(vars) which(var_names %in% vars))
+
+#Calcul des noyaux
+precompute_KX <- function(X_mat, kernelX, y_vec, anova_obj = "no") {
+  sv <- sensitivity::sensiHSIC(
+    model   = NULL,
+    X       = X_mat,
+    kernelX = kernelX,
+    paramX  = NA,
+    kernelY = "rbf",
+    paramY  = NA,
+    anova   = list(obj = anova_obj, is.uniform = FALSE),
+    nboot   = 0,
+    save.GM = list(KX = TRUE, KY = TRUE))
+  tell(sv, y = matrix(y_vec))}
+
+# On précalcule sur la première sortie pour récupérer KX
+# (KX ne dépend pas de Y, on peut le réutiliser pour toutes les sorties)
+sv_rbf=precompute_KX(X_mat, "rbf",        martheoutput[[1]])
+sv_rbf_anova=precompute_KX(X_mat, "rbf_anova",  martheoutput[[1]], "both")
+sv_m32=precompute_KX(X_mat, "matern3",    martheoutput[[1]])
+sv_m32_anova=precompute_KX(X_mat, "matern3_anova", martheoutput[[1]], "both")
+
+KX_rbf=sv_rbf$KX
+KX_rbf_anova=sv_rbf_anova$KX
+KX_m32=sv_m32$KX
+KX_m32_anova=sv_m32_anova$KX
+
+#noyaux de groupes
+
+K_grp_rbf_prod       <- lapply(group_idx, group_product_kernel, KX_array = KX_rbf)
+K_grp_m32_prod       <- lapply(group_idx, group_product_kernel, KX_array = KX_m32)
+K_grp_rbf_anova_prod <- lapply(group_idx, group_product_kernel, KX_array = KX_rbf_anova)
+K_grp_m32_anova_prod <- lapply(group_idx, group_product_kernel, KX_array = KX_m32_anova)
+
+```
+
+### HSIC Shapley
+
+```{r}
+#calcul
+
+run_group_analysis=function(K_groups, Y_vec,
+                                kernelY  = "rbf",
+                                anova    = list(obj = "no", is.uniform = FALSE)) {
+  p       <- length(K_groups)
+  X_dummy <- matrix(seq_len(n * p), nrow = n, ncol = p)
+  kX      <- if (anova$obj != "no") "rbf_anova" else "rbf"
+  gram    <- make_gramHSIC_from_list(K_groups)
+
+  sv <- sensitivity::sensiHSIC(
+    model   = NULL,
+    X       = X_dummy,
+    kernelX = kX,
+    paramX  = NA,
+    kernelY = kernelY,
+    paramY  = NA,
+    anova   = anova,
+    sensi   = gram,
+    nboot   = 0,
+    save.GM = list(KX = FALSE, KY = TRUE)
+  )
+  tell(sv, y = matrix(Y_vec))
+}
+
+# ── RBF produit ────────────────────────────────────────────────────────────
+res_grp_rbf <- lapply(output_names, function(y)
+  run_group_analysis(K_grp_rbf_prod, martheoutput[[y]], kernelY = "rbf"))
+names(res_grp_rbf) <- output_names
+
+# ── Matern 3/2 produit ────────────────────────────────────────────────────
+res_grp_m32 <- lapply(output_names, function(y)
+  run_group_analysis(K_grp_m32_prod, martheoutput[[y]], kernelY = "matern3"))
+names(res_grp_m32) <- output_names
+
+# ── RBF ANOVA produit ─────────────────────────────────────────────────────
+res_grp_rbf_anova <- lapply(output_names, function(y)
+  run_group_analysis(K_grp_rbf_anova_prod, martheoutput[[y]],
+                     kernelY = "rbf",
+                     anova   = list(obj = "both", is.uniform = FALSE)))
+names(res_grp_rbf_anova) <- output_names
+
+# ── Matern 3/2 ANOVA produit ──────────────────────────────────────────────
+res_grp_m32_anova <- lapply(output_names, function(y)
+  run_group_analysis(K_grp_m32_anova_prod, martheoutput[[y]],
+                     kernelY = "rbf",
+                     anova   = list(obj = "both", is.uniform = FALSE)))
+names(res_grp_m32_anova) <- output_names
+
+run_pvals <- function(res_list, K_groups, B = 200) {
+  mat <- matrix(NA, length(group_names), length(output_names),
+                dimnames = list(group_names, output_names))
+  for (y in output_names) {
+    KY <- res_list[[y]]$KY
+    for (g in seq_along(group_names))
+      mat[g, y] <- perm_test_from_gram(K_groups[[g]], KY, B)}
+  mat}
+
+# ── RBF ────────────────────────────────────────────────────────────────────
+r2_grp_rbf    <- extract_mat(res_grp_rbf, "S", group_names, output_names)
+pvals_grp_rbf <- run_pvals(res_grp_rbf, K_grp_rbf_prod)
+plot_heatmap(r2_grp_rbf,    "R² HSIC groupes - RBF produit")
+plot_pval(pvals_grp_rbf,    "p-valeurs HSIC groupes - RBF produit")
+
+# ── Matern 3/2 ─────────────────────────────────────────────────────────────
+r2_grp_m32    <- extract_mat(res_grp_m32, "S", group_names, output_names)
+pvals_grp_m32 <- run_pvals(res_grp_m32, K_grp_m32_prod)
+plot_heatmap(r2_grp_m32,    "R² HSIC groupes - Matern 3/2 produit")
+plot_pval(pvals_grp_m32,    "p-valeurs HSIC groupes - Matern 3/2 produit")
+
+# ── RBF ANOVA ──────────────────────────────────────────────────────────────
+r2_grp_rbf_anova <- extract_mat(res_grp_rbf_anova, "S",  group_names, output_names)
+fo_grp_rbf_anova <- extract_mat(res_grp_rbf_anova, "FO", group_names, output_names)
+to_grp_rbf_anova <- extract_mat(res_grp_rbf_anova, "TO", group_names, output_names)
+pvals_grp_rbf_anova <- run_pvals(res_grp_rbf_anova, K_grp_rbf_anova_prod)
+plot_heatmap(r2_grp_rbf_anova, "R² HSIC groupes - RBF ANOVA produit")
+plot_heatmap(fo_grp_rbf_anova, "FO HSIC-ANOVA groupes - RBF", fill_label = "FO")
+plot_heatmap(to_grp_rbf_anova, "TO HSIC-ANOVA groupes - RBF", fill_label = "TO")
+plot_pval(pvals_grp_rbf_anova, "p-valeurs HSIC-ANOVA groupes - RBF")
+
+# ── Matern 3/2 ANOVA ───────────────────────────────────────────────────────
+r2_grp_m32_anova <- extract_mat(res_grp_m32_anova, "S",  group_names, output_names)
+fo_grp_m32_anova <- extract_mat(res_grp_m32_anova, "FO", group_names, output_names)
+to_grp_m32_anova <- extract_mat(res_grp_m32_anova, "TO", group_names, output_names)
+pvals_grp_m32_anova <- run_pvals(res_grp_m32_anova, K_grp_m32_anova_prod)
+plot_heatmap(r2_grp_m32_anova, "R² HSIC groupes - Matern 3/2 ANOVA produit")
+plot_heatmap(fo_grp_m32_anova, "FO HSIC-ANOVA groupes - Matern 3/2", fill_label = "FO")
+plot_heatmap(to_grp_m32_anova, "TO HSIC-ANOVA groupes - Matern 3/2", fill_label = "TO")
+plot_pval(pvals_grp_m32_anova, "p-valeurs HSIC-ANOVA groupes - Matern 3/2")
+```
+
+```{r}
+#fonctions hsic perso
+#fonctions hsic 
+#rbf normal
+rbf_kernel_1d=function(x, sigma = NULL) {
+  x=as.numeric(x)
+  n=length(x)
+  D2=as.matrix(dist(x))^2 #norm eucl
+  if (is.null(sigma)) {
+    med=median(D2[D2 > 0], na.rm = TRUE)
+    sigma=sqrt(med / 2)
+    if (!is.finite(sigma) || sigma <= 0) sigma =1
+  }
+  exp(-D2/(2 * sigma^2))}
+
+#produit noyaux
+product_kernel=function(X,kerfun) {
+  col_names <- colnames(X)
+  K <- NULL
+  for (v in col_names) {
+    Kv <- kerfun(as.numeric(X[, v]))
+    K  <- if (is.null(K)) Kv else K * Kv
+  }
+  d <- sqrt(diag(K))
+  K / outer(d, d)
+}
+#somme noyaux
+sum_kernel=function(X,kerfun) {
+  col_names <- colnames(X)
+  K <- NULL
+  for (v in col_names) {
+    Kv <- kerfun(as.numeric(X[, v]))
+    K  <- if (is.null(K)) Kv else K + Kv
+  }
+  d <- sqrt(diag(K))
+  K / outer(d, d)
+}
+
+#hsic
+hsic=function(Kx, Ky) {
+  n=nrow(Kx)
+  H=diag(n) -matrix(1/n, n,n)
+  Kc=H %*% Kx %*% H
+  Lc=H %*% Ky %*% H
+  sum(Kc * Lc) / ((n - 1)^2)} #somme du produit de hadamard= trace en moins couteux
+
+#fonctions test permutations
+hsic_perm_test=function(Kx,Ky,B=500) {
+  n=nrow(Kx)
+  obs=hsic(Kx, Ky)
+  perm_vals=replicate(B,{
+    idx=sample(n)
+    hsic(Kx, Ky[idx, idx])})
+  p_val <- (sum(perm_vals >= obs) + 1) / (B + 1)
+  list(statistic = obs, p_value = p_val)
+}
+
+#hsic shapley
+shapley_hsic_mc=function(group_map, X_all, Y,
+                            m      = 200,
+                            kerfun = rbf_kernel_1d) {
+  d=length(group_map)
+  group_names=names(group_map)
+  n=nrow(X_all)
+  H=diag(n) - matrix(1/n, n, n)
+  Ky=kerfun(Y)
+  Kyc=H %*% Ky %*% H
+
+  # hsic_clean définie DANS la fonction pour capturer H et Kyc et optimiser du temps de calcul (on calculait aussi Kyc sinon avec lautre fonction)
+  hsic_clean=function(Kx) {
+    Kxc=H%*%Kx%*%H
+    (sum(Kxc * Kyc))/(n - 1)^2
+  }
+  #noyaux RBF de chaque groupe
+  K_list <-lapply(group_map, function(vars)
+    product_kernel(X_all[, vars, drop = FALSE], kerfun = kerfun))
+
+  # HSIC(X,Yi) noyau produit sur toutes les variables
+  vars_all <- unlist(group_map, use.names = FALSE)
+  K_all    <- product_kernel(X_all[, vars_all, drop = FALSE], kerfun = kerfun)
+  hsic_tot <- hsic_clean(K_all)
+
+  if (hsic_tot <= 0) return(setNames(rep(0, d), group_names))
+
+  contrib=numeric(d) #initialisation de la somme
+  # tirage de toutes les permutations en une fois
+  perms=replicate(m, sample(d))
+  for (i in seq_len(m)) { #on définit les permutations et initialise la boucle
+    pi_i=perms[, i]
+    K_prev =NULL
+    hsic_prev=0
+
+    for (j in seq_len(d)) { #calcul de la somme
+      l=pi_i[j]
+      K_curr=if (is.null(K_prev)) K_list[[l]] else K_prev * K_list[[l]]
+      hsic_curr=hsic_clean(K_curr)
+
+      contrib[l]=contrib[l]+(hsic_curr - hsic_prev)
+      K_prev=K_curr
+      hsic_prev=hsic_curr
+    }
+  }
+  Sh <- (contrib / m) / hsic_tot
+  names(Sh)=group_names
+  Sh
+}
+
+set.seed(443)
+sh_marthe_mc <- lapply(output_names, function(y) {
+  cat("=== Sortie :", y, "===\n")
+  shapley_hsic_mc(
+    group_map = group_map,
+    X_all     = X_all,
+    Y         = martheoutput[[y]],
+    m         = 200,
+    kerfun    = rbf_kernel_1d)
+})
+names(sh_marthe_mc) <- output_names
+
+# vérification somme = 1
+cat("\nVérification somme des Sh par sortie :\n")
+print(sapply(output_names, function(y) round(sum(sh_marthe_mc[[y]]), 4)))
+
+
+sh_df <- do.call(rbind, lapply(output_names, function(y) {
+  data.frame(
+    groupe = names(sh_marthe_mc[[y]]),
+    valeur = as.numeric(sh_marthe_mc[[y]]),
+    sortie = y)
+}))
+
+make_sh_plot <- function(y) {
+  df       <- sh_df[sh_df$sortie == y, ]
+  ymin     <- min(0, min(df$valeur, na.rm = TRUE)) * 1.3
+  ymax     <- max(0, max(df$valeur, na.rm = TRUE)) * 1.3
+  df$hjust <- ifelse(df$valeur >= 0, -0.1, 1.1)
+
+  ggplot(df, aes(x = reorder(groupe, valeur), y = valeur, fill = valeur >= 0)) +
+    geom_col(show.legend = FALSE) +
+    geom_text(aes(label = round(valeur, 4), hjust = hjust), size = 3) +
+    scale_fill_manual(values = c("TRUE" = "#4C8BE0", "FALSE" = "#E05C4C")) +
+    coord_flip() +
+    ylim(ymin, ymax) +
+    labs(title = y, x = NULL, y = "Sh") +
+    theme_minimal(base_size = 11)
+}
+
+for (y in output_names) {
+  print(make_sh_plot(y))
+}
+
+
+```
+
+# Système multi-niveaux
+
+On cherche à tansformer le système multi-niveaux en un système à 1 niveau en "condensant" l'information des X et Y dans le système, par exemple de la manière suivante.
+
+On part sur une optique non-paramétrique.
+
+![![](images/clipboard-4203486573.png)](images/clipboard-4250267876.png)
+
+### Système de Xu
+
+```{r}
+
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+library(rvinecopulib)
+library(sensitivity)
+library(gtools)
+
+#données
+set.seed(443)
+n = 1000
+X1 = rnorm(n, mean = 1, sd = sqrt(0.1))
+X2 = rnorm(n, mean = 2, sd = sqrt(0.1))
+X3 = rnorm(n, mean = 3, sd = sqrt(0.1))
+X4 = rnorm(n, mean = 4, sd = sqrt(0.1))
+
+nu = 2
+omega = 2
+
+## sous-systèmes niveau bas
+Y1 = 2 * X1 + (-X1 * X2) * nu + 10 * X3
+Y2 = X1^2 + 2 * X2
+Y3 = 3 * X1 + sqrt(X2)
+
+## sous-système niveau haut
+Z = X4 * Y1^omega + X4^2 * Y2^omega + 2 * X4^2 * Y3^omega + 10 * X4^2 * X3^omega
+
+vars_all = data.frame(X1 = X1, X2 = X2, X3 = X3, X4 = X4,
+                      Y1 = Y1, Y2 = Y2, Y3 = Y3, Z = Z)
+
+vars_all = as.data.frame(vars_all)
+colnames(vars_all) = trimws(colnames(vars_all))
+
+vn_all = colnames(vars_all)
+X_vars = c("X1", "X2", "X3", "X4")
+Y_vars = c("Y1", "Y2", "Y3")
+tau_threshold = 0.10
+
+get_col = function(df, nm) as.numeric(df[[nm]])
+X_all = sapply(X_vars, get_col, df = vars_all)
+
+## on recupere les variables influentes
+U_all = pseudo_obs(as.matrix(vars_all))
+pipeline_hierarchique2 <- function( #fonction qui sert à faire le diagnostic sur le niveau X Z dans les 4 cas du système de xu et al
+  vars_all,
+  X_vars = c("X1", "X2", "X3", "X4"),
+  model_Y1_fn = function(X, nu) {
+    2 * X[, 1] - nu * X[, 1] * X[, 2] + 10 * X[, 3]
+  },
+  model_Y2_fn = function(X, nu) {
+    X[, 1]^2 + 2 * X[, 2]
+  },
+  model_Y3_fn = function(X, nu) {
+    3 * X[, 1] + sqrt(abs(X[, 2]))
+  },
+  g_fun = function(X3, X4, Y1, Y2, Y3, omega) {
+    X4 * Y1^omega +
+      X4^2 * Y2^omega +
+      2 * X4^2 * Y3^omega +
+      10 * X4^2 * X3^omega
+  },
+  nu = 2,
+  omega = 2,
+  leave_one_out = TRUE,
+  No = 50,
+  Ni = 3,
+  verbose = TRUE,
+  seed = 443
+) {
+  set.seed(seed)
+
+  # ==========================================================================
+  # Fonctions auxiliaires
+  # ==========================================================================
+
+  get_col <- function(x, col) {
+    x <- as.matrix(x)
+
+    if (ncol(x) < col) {
+      return(rep(NA_real_, nrow(x)))
+    }
+
+    as.numeric(x[, col])
+  }
+
+  bandwidth_silverman <- function(n, d) {
+    n^(-1 / (d + 4))
+  }
+
+  pseudo_obs_manual <- function(x) {
+    x <- as.matrix(x)
+
+    apply(x, 2, function(x_col) {
+      rank(x_col) / (length(x_col) + 1)
+    })
+  }
+
+  K_gauss <- function(u, U_ref, h) {
+    U_ref <- as.matrix(U_ref)
+
+    apply(U_ref, 1, function(u_ref) {
+      prod(dnorm(u - u_ref, mean = 0, sd = h))
+    })
+  }
+
+  # ==========================================================================
+  # Fonction de répartition conditionnelle estimée par KDE
+  # ==========================================================================
+
+  F_cond_kde <- function(v, u_X, U_Xs, u_Zs, h) {
+    weights <- K_gauss(
+      u = u_X,
+      U_ref = U_Xs,
+      h = h
+    )
+
+    weight_sum <- sum(weights)
+
+    if (weight_sum < 1e-12) {
+      return(v)
+    }
+
+    sum(weights * (u_Zs <= v)) / weight_sum
+  }
+
+  # ==========================================================================
+  # Quantile conditionnel estimé par inversion
+  # ==========================================================================
+
+  Q_cond_kde <- function(
+    u_Z,
+    u_X,
+    U_Xs,
+    u_Zs,
+    h,
+    tol = 1e-4
+  ) {
+    objective <- function(v) {
+      F_cond_kde(
+        v = v,
+        u_X = u_X,
+        U_Xs = U_Xs,
+        u_Zs = u_Zs,
+        h = h
+      ) - u_Z
+    }
+
+    lower <- tol
+    upper <- 1 - tol
+
+    f_lower <- objective(lower)
+    f_upper <- objective(upper)
+
+    if (
+      is.na(f_lower) ||
+      is.na(f_upper) ||
+      sign(f_lower) == sign(f_upper)
+    ) {
+      grid <- seq(lower, upper, length.out = 200)
+      values <- vapply(grid, objective, numeric(1))
+
+      return(grid[which.min(abs(values))])
+    }
+
+    uniroot(
+      f = objective,
+      lower = lower,
+      upper = upper,
+      tol = tol
+    )$root
+  }
+
+  # ==========================================================================
+  # Tirage conditionnel par rééchantillonnage pondéré
+  # ==========================================================================
+
+  sample_cond_kde <- function(
+    Ni_s,
+    U_target_ref,
+    U_cond_ref,
+    x_cond,
+    h
+  ) {
+    U_target_ref <- as.matrix(U_target_ref)
+    U_cond_ref <- as.matrix(U_cond_ref)
+
+    n_ref <- nrow(U_cond_ref)
+
+    if (is.null(x_cond) || length(x_cond) == 0L) {
+      indices <- sample(
+        seq_len(n_ref),
+        size = Ni_s,
+        replace = TRUE
+      )
+
+      return(
+        list(
+          idx = indices,
+          vals = U_target_ref[indices, , drop = FALSE]
+        )
+      )
+    }
+
+    weights <- K_gauss(
+      u = x_cond,
+      U_ref = U_cond_ref,
+      h = h
+    )
+
+    weight_sum <- sum(weights)
+
+    if (weight_sum < 1e-12) {
+      indices <- sample(
+        seq_len(n_ref),
+        size = Ni_s,
+        replace = TRUE
+      )
+    } else {
+      indices <- sample(
+        seq_len(n_ref),
+        size = Ni_s,
+        replace = TRUE,
+        prob = weights / weight_sum
+      )
+    }
+
+    list(
+      idx = indices,
+      vals = U_target_ref[indices, , drop = FALSE]
+    )
+  }
+  
+
+  # ==========================================================================
+  # Initialisation
+  # ==========================================================================
+
+  vars_all <- as.data.frame(vars_all)
+  colnames(vars_all) <- trimws(colnames(vars_all))
+
+  n <- nrow(vars_all)
+  out <- list()
+
+  if (!all(X_vars %in% colnames(vars_all))) {
+    stop("Certaines variables de X_vars sont absentes de vars_all.")
+  }
+
+  if (!all(c("X3", "X4") %in% colnames(vars_all))) {
+    stop("Les colonnes X3 et X4 doivent être présentes dans vars_all.")
+  }
+
+  if (No < 1 || Ni < 1) {
+    stop("No et Ni doivent être strictement positifs.")
+  }
+
+  X_mat <- as.matrix(
+    vars_all[, X_vars, drop = FALSE]
+  )
+
+  X3_vec <- as.numeric(vars_all[, "X3"])
+  X4_vec <- as.numeric(vars_all[, "X4"])
+
+  # Recalcul des sorties à partir des paramètres fournis
+  Y1_calc <- model_Y1_fn(X_mat, nu)
+  Y2_calc <- model_Y2_fn(X_mat, nu)
+  Y3_calc <- model_Y3_fn(X_mat, nu)
+
+  Z_vec <- g_fun(
+    X3 = X3_vec,
+    X4 = X4_vec,
+    Y1 = Y1_calc,
+    Y2 = Y2_calc,
+    Y3 = Y3_calc,
+    omega = omega
+  )
+
+  if (verbose) {
+    cat("nu =", nu, "| omega =", omega, "\n")
+    cat(
+      "Z | moyenne =",
+      round(mean(Z_vec), 4),
+      "| écart-type =",
+      round(sd(Z_vec), 4),
+      "\n"
+    )
+  }
+
+  # ==========================================================================
+  # Pseudo-observations
+  # ==========================================================================
+
+  data_X <- as.data.frame(
+    X_mat[, X_vars, drop = FALSE]
+  )
+
+  U_X <- pseudo_obs_manual(data_X)
+
+  data_XZ <- cbind(
+    data_X,
+    Z = Z_vec
+  )
+
+  U_XZ <- pseudo_obs_manual(data_XZ)
+
+  u_Zs <- U_XZ[, "Z"]
+  U_Xs_Z <- U_XZ[, X_vars, drop = FALSE]
+
+  xj_sel_Z <- X_vars
+  out$xj_sel_Z <- xj_sel_Z
+
+  # ==========================================================================
+  # Bloc 1 (non obligatoire, surtout pr valider les reconstructions par une comparaison) : reconstruction de Z par inversion de F_{Z|X}
+  # ==========================================================================
+
+  d_x <- length(xj_sel_Z)
+  h <- bandwidth_silverman(n, d_x)
+
+  if (verbose) {
+    cat(
+      "\nDimension de X =",
+      d_x,
+      "| bande passante =",
+      round(h, 4),
+      "\n"
+    )
+
+    cat("Calcul de Z'...\n")
+  }
+
+  u_prime_Z <- numeric(n)
+
+  progress_points <- unique(
+    pmax(
+      1L,
+      floor(seq(1, n, length.out = 11))
+    )
+  )
+
+  for (i in seq_len(n)) {
+    if (verbose && i %in% progress_points) {
+      cat(
+        round(100 * i / n),
+        "% ",
+        sep = ""
+      )
+    }
+
+    ref <- if (leave_one_out) {
+      setdiff(seq_len(n), i)
+    } else {
+      seq_len(n)
+    }
+
+    u_prime_Z[i] <- Q_cond_kde(
+      u_Z = u_Zs[i],
+      u_X = U_Xs_Z[i, ],
+      U_Xs = U_Xs_Z[ref, , drop = FALSE],
+      u_Zs = u_Zs[ref],
+      h = h
+    )
+  }
+
+  if (verbose) {
+    cat("\n")
+  }
+
+  u_prime_Z <- pmin(
+    pmax(u_prime_Z, 1e-6),
+    1 - 1e-6
+  )
+
+  Zprime <- as.numeric(
+    quantile(
+      Z_vec,
+      probs = u_prime_Z,
+      names = FALSE
+    )
+  )
+
+  tau_ZZp <- cor(
+    Z_vec,
+    Zprime,
+    method = "kendall",
+    use = "complete.obs"
+  )
+
+  delta_Z <- ifelse(
+    Z_vec == 0,
+    NA_real_,
+    (Zprime - Z_vec) / Z_vec
+  )
+
+  U_check <- pseudo_obs(
+    cbind(Z_vec, Zprime)
+  )
+
+  fit_check <- bicop(
+    U_check,
+    family_set = "parametric",
+    selcrit = "aic"
+  )
+
+  tau_cop <- fit_check$tau
+
+  if (
+    is.null(tau_cop) ||
+    !is.numeric(tau_cop)
+  ) {
+    tau_cop <- cor(
+      U_check[, 1],
+      U_check[, 2],
+      method = "kendall",
+      use = "complete.obs"
+    )
+  }
+
+  if (verbose) {
+    cat("\nDiagnostic Z ~ Z'\n")
+    cat(
+      "tau(Z, Z') =",
+      round(tau_ZZp, 4),
+      "\n"
+    )
+    cat(
+      "Copule :",
+      fit_check$family,
+      "| tau =",
+      round(tau_cop, 4),
+      "\n"
+    )
+    print(summary(delta_Z))
+  }
+
+  out$Zprime <- Zprime
+  out$tau_ZZp <- tau_ZZp
+  out$delta_Z <- delta_Z
+  out$copule_ZZp <- list(
+    famille = fit_check$family,
+    tau = round(tau_cop, 4)
+  )
+
+  # ==========================================================================
+  # Bloc 2 : estimation des valeurs de Shapley X -> Z
+  # ==========================================================================
+
+  d_shap <- length(xj_sel_Z)
+  h_shap <- bandwidth_silverman(n, d_shap)
+
+  model_obj <- list(
+    joueurs = xj_sel_Z,
+    data_real = data_X,
+    U_joueurs = U_X,
+    Z_vec = Z_vec,
+    h = h_shap,
+    n = n
+  )
+
+  predict_fn <- function(obj, X) {
+    X <- as.matrix(X)
+
+    apply(X, 1, function(x_row) {
+      u_x <- vapply(
+        seq_along(x_row),
+        function(k) {
+          mean(obj$data_real[, k] <= x_row[k])
+        },
+        numeric(1)
+      )
+
+      u_x <- pmin(
+        pmax(u_x, 1e-6),
+        1 - 1e-6
+      )
+
+      weights <- K_gauss(
+        u = u_x,
+        U_ref = obj$U_joueurs,
+        h = obj$h
+      )
+
+      weight_sum <- sum(weights)
+
+      if (weight_sum < 1e-12) {
+        return(mean(obj$Z_vec))
+      }
+
+      sum(weights * obj$Z_vec) / weight_sum
+    })
+  }
+
+  Xall_fn <- function(n_samp) {
+    indices <- sample(
+      seq_len(n),
+      size = n_samp,
+      replace = TRUE
+    )
+
+    as.matrix(
+      data_X[indices, , drop = FALSE]
+    )
+  }
+
+  Xset_fn <- function(
+    n_samp,
+    Sj,
+    Sjc,
+    xjc
+  ) {
+    if (length(Sjc) == 0L) {
+      indices <- sample(
+        seq_len(n),
+        size = n_samp,
+        replace = TRUE
+      )
+
+      out_mat <- as.matrix(
+        data_X[indices, Sj, drop = FALSE]
+      )
+
+      colnames(out_mat) <- xj_sel_Z[Sj]
+
+      return(out_mat)
+    }
+
+    u_Sjc <- vapply(
+      seq_along(Sjc),
+      function(k) {
+        col_real <- data_X[, Sjc[k]]
+        mean(col_real <= xjc[k])
+      },
+      numeric(1)
+    )
+
+    u_Sjc <- pmin(
+      pmax(u_Sjc, 1e-6),
+      1 - 1e-6
+    )
+
+    draw <- sample_cond_kde(
+      Ni_s = n_samp,
+      U_target_ref = U_X[, Sj, drop = FALSE],
+      U_cond_ref = U_X[, Sjc, drop = FALSE],
+      x_cond = u_Sjc,
+      h = h_shap
+    )
+
+    out_mat <- matrix(
+      NA_real_,
+      nrow = n_samp,
+      ncol = length(Sj)
+    )
+
+    colnames(out_mat) <- xj_sel_Z[Sj]
+
+    for (k in seq_along(Sj)) {
+      out_mat[, k] <- quantile(
+        data_X[, Sj[k]],
+        probs = pmin(
+          pmax(draw$vals[, k], 1e-6),
+          1 - 1e-6
+        ),
+        names = FALSE
+      )
+    }
+
+    out_mat
+  }
+
+  if (verbose) {
+    cat("\nEstimation des valeurs de Shapley X -> Z\n")
+  }
+
+  res_XZ <- shapleyPermEx(
+    model = function(X) {
+      predict_fn(model_obj, X)
+    },
+    Xall = Xall_fn,
+    Xset = Xset_fn,
+    d = d_shap,
+    Nv = n,
+    No = No,
+    Ni = Ni,
+    colnames = xj_sel_Z
+  )
+
+  out$res_shapley_XZ <- res_XZ
+
+  # ==========================================================================
+  # Tableau récapitulatif
+  # ==========================================================================
+
+  tau_XZ <- vapply(
+    xj_sel_Z,
+    function(xj) {
+      cor(
+        as.numeric(vars_all[, xj]),
+        Z_vec,
+        method = "kendall",
+        use = "complete.obs"
+      )
+    },
+    numeric(1)
+  )
+
+  shapley_est <- get_col(
+    res_XZ$Shapley,
+    col = 1
+  )
+
+  shapley_se <- get_col(
+    res_XZ$Shapley,
+    col = 3
+  )
+
+  sobol1_est <- get_col(
+    res_XZ$SobolS,
+    col = 1
+  )
+
+  sobolT_est <- get_col(
+    res_XZ$SobolT,
+    col = 1
+  )
+
+  recap_XZ <- data.frame(
+    joueur = xj_sel_Z,
+    tau_XZ = round(tau_XZ, 4),
+    shapley_est = round(shapley_est, 4),
+    shapley_se = round(shapley_se, 4),
+    shapley_lo = round(
+      shapley_est - 1.96 * shapley_se,
+      4
+    ),
+    shapley_hi = round(
+      shapley_est + 1.96 * shapley_se,
+      4
+    ),
+    sobol1_est = round(sobol1_est, 4),
+    sobolT_est = round(sobolT_est, 4),
+    stringsAsFactors = FALSE
+  )
+
+  out$recap_XZ <- recap_XZ
+  out$tau_XZ <- tau_XZ
+
+  if (verbose) {
+    cat("\nTableau X -> Z\n")
+    print(
+      recap_XZ,
+      row.names = FALSE
+    )
+  }
+
+  # ==========================================================================
+  # Graphique Shapley et Sobol
+  # ==========================================================================
+
+  df_sh <- bind_rows(
+    data.frame(
+      joueur = xj_sel_Z,
+      val = shapley_est,
+      lo = shapley_est - 1.96 * shapley_se,
+      hi = shapley_est + 1.96 * shapley_se,
+      type = "Shapley"
+    ),
+    data.frame(
+      joueur = xj_sel_Z,
+      val = sobol1_est,
+      lo = NA_real_,
+      hi = NA_real_,
+      type = "Sobol S1"
+    ),
+    data.frame(
+      joueur = xj_sel_Z,
+      val = sobolT_est,
+      lo = NA_real_,
+      hi = NA_real_,
+      type = "Sobol ST"
+    )
+  )
+
+  p_shapXZ <- ggplot(
+    df_sh,
+    aes(
+      x = joueur,
+      y = val,
+      fill = type
+    )
+  ) +
+    geom_col(
+      position = position_dodge(width = 0.65),
+      width = 0.65
+    ) +
+    geom_text(
+      aes(label = round(val, 3)),
+      position = position_dodge(width = 0.65),
+      vjust = -0.6,
+      size = 3
+    ) +
+    scale_fill_brewer(
+      palette = "Set2"
+    ) +
+    labs(
+      title = "Shapley et Sobol : X -> Z",
+      subtitle = paste0(
+        "nu = ", nu,
+        " | omega = ", omega,
+        " | tau(Z, Z') = ",
+        round(tau_ZZp, 4),
+        " | copule Z ~ Z' : ",
+        fit_check$family
+      ),
+      x = NULL,
+      y = "Indice",
+      fill = NULL
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      legend.position = "bottom"
+    )
+
+  df_sobol <- df_sh %>%
+    filter(
+      type %in% c("Sobol S1", "Sobol ST")
+    )
+
+  p_sobolXZ <- ggplot(
+    df_sobol,
+    aes(
+      x = joueur,
+      y = val,
+      fill = type
+    )
+  ) +
+    geom_col(
+      position = position_dodge(width = 0.65),
+      width = 0.65
+    ) +
+    geom_text(
+      aes(label = round(val, 3)),
+      position = position_dodge(width = 0.65),
+      vjust = -0.6,
+      size = 3
+    ) +
+    scale_fill_brewer(
+      palette = "Set2"
+    ) +
+    labs(
+      title = "Indices de Sobol : X -> Z",
+      subtitle = paste0(
+        "nu = ", nu,
+        " | omega = ", omega,
+        " | tau(Z, Z') = ",
+        round(tau_ZZp, 4),
+        " | copule Z ~ Z' : ",
+        fit_check$family
+      ),
+      x = NULL,
+      y = "Indice",
+      fill = NULL
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(
+      legend.position = "bottom"
+    )
+
+  out$plots <- list(
+    p_shapXZ = p_shapXZ,
+    p_sobolXZ = p_sobolXZ
+  )
+
+  print(p_shapXZ)
+  print(p_sobolXZ)
+
+  invisible(out)
+}
+
+
+
+# ========================================================================
+
+res2_XZ22 <- pipeline_hierarchique2(
+  vars_all = vars_all,
+  model_Y1_fn = function(X, nu) {
+    2 * X[, 1] - nu * X[, 1] * X[, 2] + 10 * X[, 3]
+  },
+  model_Y2_fn = function(X, nu) {
+    X[, 1]^2 + 2 * X[, 2]
+  },
+  model_Y3_fn = function(X, nu) {
+    3 * X[, 1] + sqrt(abs(X[, 2]))
+  },
+  g_fun = function(X3, X4, Y1, Y2, Y3, omega) {
+    X4 * Y1^omega +
+      X4^2 * Y2^omega +
+      2 * X4^2 * Y3^omega +
+      10 * X4^2 * X3^omega
+  },
+  nu = 2,
+  omega = 2,
+  No = 50,
+  Ni = 3
+)
+
+res2_XZ20 <- pipeline_hierarchique2(
+  vars_all = vars_all,
+  model_Y1_fn = function(X, nu) {
+    2 * X[, 1] - nu * X[, 1] * X[, 2] + 10 * X[, 3]
+  },
+  model_Y2_fn = function(X, nu) {
+    X[, 1]^2 + 2 * X[, 2]
+  },
+  model_Y3_fn = function(X, nu) {
+    3 * X[, 1] + sqrt(abs(X[, 2]))
+  },
+  g_fun = function(X3, X4, Y1, Y2, Y3, omega) {
+    X4 * Y1^omega +
+      X4^2 * Y2^omega +
+      2 * X4^2 * Y3^omega +
+      10 * X4^2 * X3^omega
+  },
+  nu = 0,
+  omega = 2,
+  No = 50,
+  Ni = 3
+)
+
+res2_XZ12 <- pipeline_hierarchique2(
+  vars_all = vars_all,
+  model_Y1_fn = function(X, nu) {
+    2 * X[, 1] - nu * X[, 1] * X[, 2] + 10 * X[, 3]
+  },
+  model_Y2_fn = function(X, nu) {
+    X[, 1]^2 + 2 * X[, 2]
+  },
+  model_Y3_fn = function(X, nu) {
+    3 * X[, 1] + sqrt(abs(X[, 2]))
+  },
+  g_fun = function(X3, X4, Y1, Y2, Y3, omega) {
+    X4 * Y1^omega +
+      X4^2 * Y2^omega +
+      2 * X4^2 * Y3^omega +
+      10 * X4^2 * X3^omega
+  },
+  nu = 2,
+  omega = 1,
+  No = 50,
+  Ni = 3
+)
+
+res2_XZ10 <- pipeline_hierarchique2(
+  vars_all = vars_all,
+  model_Y1_fn = function(X, nu) {
+    2 * X[, 1] - nu * X[, 1] * X[, 2] + 10 * X[, 3]
+  },
+  model_Y2_fn = function(X, nu) {
+    X[, 1]^2 + 2 * X[, 2]
+  },
+  model_Y3_fn = function(X, nu) {
+    3 * X[, 1] + sqrt(abs(X[, 2]))
+  },
+  g_fun = function(X3, X4, Y1, Y2, Y3, omega) {
+    X4 * Y1^omega +
+      X4^2 * Y2^omega +
+      2 * X4^2 * Y3^omega +
+      10 * X4^2 * X3^omega
+  },
+  nu = 0,
+  omega = 1,
+  No = 50,
+  Ni = 3
+)
+```
+
+```{r}
+
+level_reduction_nonparametric_fig7 = function( #fonction pr le niveau Y Z dans systeme de xu et al
+
+  vars_all,
+  X_vars = c("X1","X2","X3","X4"),
+  Y_vars = c("Y1","Y2","Y3"),
+
+  model_Y1 = NULL,
+  model_Y2 = NULL,
+  model_Y3 = NULL,
+
+  g_fun = function(X3, X4, Y1, Y2, Y3, omega)
+    X4*Y1^omega + X4^2*Y2^omega + 2*X4^2*Y3^omega + 10*X4^2*X3^omega,
+
+  omega = 2,
+  nu = 2,
+
+  tau_threshold = 0.10,
+  sob_threshold = 0.20,
+
+  nboot_sobol = 0,
+  leave_one_out = TRUE,
+
+  No = 50,
+  Ni = 3,
+  verbose = TRUE,
+  seed = 443
+
+) {
+
+  set.seed(seed)
+
+  get_col = function(df, nm) as.numeric(df[[nm]])
+  bandwidth_silverman = function(n, d) n^(-1/(d+4))
+  pseudo_obs_manual = function(x)
+    apply(as.matrix(x), 2, function(col) rank(col)/(length(col)+1))
+
+  K_gauss = function(u, U_ref, h) {
+    n = nrow(U_ref)
+    w = numeric(n)
+    for (k in seq_len(n)) {
+      w[k] = prod(dnorm(u - U_ref[k,], mean = 0, sd = h))
+    }
+    w
+  }
+
+  F_cond_kde = function(v, u_X, U_Xs, u_Ys, h) {
+    w = K_gauss(u_X, U_Xs, h)
+    w_sum = sum(w)
+    if (w_sum < 1e-12) return(v)
+    sum(w * (u_Ys <= v)) / w_sum
+  }
+
+  Q_cond_kde = function(u_Y, u_X, U_Xs, u_Ys, h, tol = 1e-4) {
+    f = function(v) F_cond_kde(v, u_X, U_Xs, u_Ys, h) - u_Y
+    f0 = f(tol)
+    f1 = f(1 - tol)
+    if (is.na(f0) || is.na(f1) || sign(f0) == sign(f1)) {
+      grid = seq(tol, 1 - tol, length.out = 200)
+      return(grid[which.min(abs(sapply(grid, f)))])
+    }
+    uniroot(f, lower = tol, upper = 1 - tol, tol = tol)$root
+  }
+
+  make_kde_model = function(joueurs, data_real, U_joueurs, h, omega) {
+    list(
+      joueurs = joueurs,
+      data_real = as.data.frame(data_real),
+      U_joueurs = as.matrix(U_joueurs),
+      h = h,
+      omega = omega,
+      n = nrow(data_real)
+    )
+  }
+
+  predict_kde_model = function(object, X) {
+    X = as.matrix(X)
+    colnames(X) = object$joueurs
+    g_fun(
+      X3 = X[, "X3"], X4 = X[, "X4"],
+      Y1 = X[, "Y1"], Y2 = X[, "Y2"], Y3 = X[, "Y3"],
+      omega = object$omega
+    )
+  }
+
+  Xall_kde_model = function(object, n_samp) {
+    idx = sample(object$n, n_samp, replace = TRUE)
+    as.matrix(object$data_real[idx, , drop = FALSE])
+  }
+
+  Xset_kde_model = function(object, n_samp, Sj, Sjc, xjc) {
+    if (length(Sjc) == 0L) {
+      idx = sample(object$n, n_samp, replace = TRUE)
+      out = as.matrix(object$data_real[idx, Sj, drop = FALSE])
+      colnames(out) = object$joueurs[Sj]
+      return(out)
+    }
+
+    u_Sjc = numeric(length(Sjc))
+    for (k in seq_along(Sjc)) {
+      col_real = object$data_real[, Sjc[k]]
+      u_Sjc[k] = mean(col_real <= xjc[k])
+    }
+    u_Sjc = pmin(pmax(u_Sjc, 1e-6), 1 - 1e-6)
+
+    draw = sample_cond_kde(
+      n_samp,
+      object$U_joueurs[, Sj, drop = FALSE],
+      object$U_joueurs[, Sjc, drop = FALSE],
+      u_Sjc,
+      object$h
+    )
+
+    out = matrix(NA_real_, nrow = n_samp, ncol = length(Sj))
+    colnames(out) = object$joueurs[Sj]
+
+    for (k in seq_along(Sj)) {
+      col_real = object$data_real[, Sj[k]]
+      out[, k] = quantile(col_real, probs = pmin(pmax(draw$vals[, k], 1e-6), 1 - 1e-6))
+    }
+    out
+  }
+
+  extract_full = function(res, joueurs) {
+    get_s = function(mat, col) {
+      m = as.matrix(mat)
+      if (ncol(m) >= col) as.numeric(m[, col]) else rep(NA_real_, nrow(m))
+    }
+    data.frame(
+      joueur = joueurs,
+      shapley_est = round(get_s(res$Shapley, 1), 4),
+      shapley_se  = round(get_s(res$Shapley, 3), 4),
+      shapley_lo  = round(get_s(res$Shapley, 1) - 1.96 * get_s(res$Shapley, 3), 4),
+      shapley_hi  = round(get_s(res$Shapley, 1) + 1.96 * get_s(res$Shapley, 3), 4),
+      sobol1_est  = round(get_s(res$SobolS, 1), 4),
+      sobol1_se   = round(get_s(res$SobolS, 3), 4),
+      sobolT_est  = round(get_s(res$SobolT, 1), 4),
+      sobolT_se   = round(get_s(res$SobolT, 3), 4),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  extract_shapley = function(res) as.numeric(as.matrix(res$Shapley)[, 1])
+
+  vars_all = as.data.frame(vars_all)
+  colnames(vars_all) = trimws(colnames(vars_all))
+  vn_all = colnames(vars_all)
+  n = nrow(vars_all)
+
+  U_all = pseudo_obs(as.matrix(vars_all))
+  X_all = sapply(X_vars, get_col, df = vars_all)
+
+  out = list()
+
+  # ============================================================
+  # 1) masque tau (inutile ds cet exemple, utile)
+  # ============================================================
+  tau_XY = matrix(
+    NA_real_,
+    nrow = length(X_vars),
+    ncol = length(Y_vars),
+    dimnames = list(X_vars, Y_vars)
+  )
+
+  for (xj in X_vars) {
+    for (yi in Y_vars) {
+      tau_XY[xj, yi] = cor(
+        get_col(vars_all, xj),
+        get_col(vars_all, yi),
+        method = "kendall",
+        use = "complete.obs"
+      )
+    }
+  }
+
+  mask_tau = abs(tau_XY) > tau_threshold
+  mask_tau[is.na(mask_tau)] = FALSE
+
+  # ============================================================
+  # 2) masque Sobol
+  # ============================================================
+  if (is.null(model_Y1) || is.null(model_Y2) || is.null(model_Y3)) {
+    stop("model_Y1, model_Y2, model_Y3 requis pour la sélection Sobol")
+  }
+
+  n_half = floor(n / 2)
+
+  sobY1 = sobolSalt(model = NULL, X1 = X_all[(n_half + 1):n, ], X2 = X_all[1:n_half, ], nboot = nboot_sobol)
+  sobY2 = sobolSalt(model = NULL, X1 = X_all[(n_half + 1):n, ], X2 = X_all[1:n_half, ], nboot = nboot_sobol)
+  sobY3 = sobolSalt(model = NULL, X1 = X_all[(n_half + 1):n, ], X2 = X_all[1:n_half, ], nboot = nboot_sobol)
+
+  sobol_Y1 = tell(sobY1, model_Y1(sobY1$X))
+  sobol_Y2 = tell(sobY2, model_Y2(sobY2$X))
+  sobol_Y3 = tell(sobY3, model_Y3(sobY3$X))
+
+  df_S = bind_rows(
+    data.frame(var = rownames(sobol_Y1$S), sobol = sobol_Y1$S$original, sobol_T = sobol_Y1$T$original, systeme = "Y1"),
+    data.frame(var = rownames(sobol_Y2$S), sobol = sobol_Y2$S$original, sobol_T = sobol_Y2$T$original, systeme = "Y2"),
+    data.frame(var = rownames(sobol_Y3$S), sobol = sobol_Y3$S$original, sobol_T = sobol_Y3$T$original, systeme = "Y3")
+  )
+
+  sob_T = matrix(
+    NA_real_,
+    nrow = length(X_vars),
+    ncol = length(Y_vars),
+    dimnames = list(X_vars, Y_vars)
+  )
+
+  for (xj in X_vars) {
+    for (yi in Y_vars) {
+      val = df_S %>% dplyr::filter(var == xj, systeme == yi) %>% dplyr::pull(sobol_T)
+      sob_T[xj, yi] = if (length(val) > 0 && !is.na(val)) val else 0
+    }
+  }
+
+  mask_sobol = sob_T > sob_threshold
+  mask_sobol[is.na(mask_sobol)] = FALSE
+
+  # ============================================================
+  # 3) reconstruction tau
+  # ============================================================
+  recap_tau = data.frame(
+    Yi = Y_vars,
+    Xj_influents = NA_character_,
+    h = NA_real_,
+    famille_copule = NA_character_,
+    tau_copule = NA_real_,
+    stringsAsFactors = FALSE
+  )
+
+  Yprime_tau = list()
+
+  for (yi in Y_vars) {
+    xj_sel = rownames(mask_tau)[mask_tau[, yi]]
+    xj_sel = xj_sel[!is.na(xj_sel) & xj_sel %in% vn_all]
+
+    recap_tau$Xj_influents[recap_tau$Yi == yi] =
+      if (length(xj_sel) == 0) "—" else paste(xj_sel, collapse = ", ")
+
+    if (length(xj_sel) == 0L) {
+      Yprime_tau[[yi]] = get_col(vars_all, yi)
+      recap_tau$h[recap_tau$Yi == yi] = NA_real_
+      recap_tau$famille_copule[recap_tau$Yi == yi] = "—"
+      recap_tau$tau_copule[recap_tau$Yi == yi] = 1
+      next
+    }
+
+    d_x = length(xj_sel)
+    h = bandwidth_silverman(n, d_x)
+    recap_tau$h[recap_tau$Yi == yi] = round(h, 4)
+
+    idx_xj = match(xj_sel, vn_all)
+    idx_yi = match(yi, vn_all)
+
+    U_Xs = U_all[, idx_xj, drop = FALSE]
+    u_Ys = U_all[, idx_yi]
+
+    u_prime = numeric(n)
+    for (i in seq_len(n)) {
+      idx_ref = if (leave_one_out) setdiff(seq_len(n), i) else seq_len(n)
+      u_prime[i] = Q_cond_kde(
+        u_Y = u_Ys[i],
+        u_X = U_Xs[i, ],
+        U_Xs = U_Xs[idx_ref, , drop = FALSE],
+        u_Ys = u_Ys[idx_ref],
+        h = h
+      )
+    }
+
+    Yi_vals = get_col(vars_all, yi)
+    Yprime_tau[[yi]] = as.numeric(quantile(Yi_vals, probs = pmin(pmax(u_prime, 1e-6), 1 - 1e-6)))
+
+    U_check = pseudo_obs(cbind(Yi_vals, Yprime_tau[[yi]]))
+    fit_check = bicop(U_check, family_set = "parametric", selcrit = "aic")
+    tau_cop = fit_check$tau
+    if (is.null(tau_cop) || !is.numeric(tau_cop)) {
+      tau_cop = cor(U_check[, 1], U_check[, 2], method = "kendall")
+    }
+
+    recap_tau$famille_copule[recap_tau$Yi == yi] = fit_check$family
+    recap_tau$tau_copule[recap_tau$Yi == yi] = round(tau_cop, 4)
+  }
+
+  # ============================================================
+  # 4) reconstruction sobol
+  # ============================================================
+  recap_sobol = data.frame(
+    Yi = Y_vars,
+    Xj_influents = NA_character_,
+    h = NA_real_,
+    famille_copule = NA_character_,
+    tau_copule = NA_real_,
+    stringsAsFactors = FALSE
+  )
+
+  Yprime_sobol = list()
+
+  for (yi in Y_vars) {
+    xj_sel = rownames(mask_sobol)[mask_sobol[, yi]]
+    xj_sel = xj_sel[!is.na(xj_sel) & xj_sel %in% vn_all]
+
+    recap_sobol$Xj_influents[recap_sobol$Yi == yi] =
+      if (length(xj_sel) == 0) "—" else paste(xj_sel, collapse = ", ")
+
+    if (length(xj_sel) == 0L) {
+      Yprime_sobol[[yi]] = get_col(vars_all, yi)
+      recap_sobol$h[recap_sobol$Yi == yi] = NA_real_
+      recap_sobol$famille_copule[recap_sobol$Yi == yi] = "—"
+      recap_sobol$tau_copule[recap_sobol$Yi == yi] = 1
+      next
+    }
+
+    d_x = length(xj_sel)
+    h = bandwidth_silverman(n, d_x)
+    recap_sobol$h[recap_sobol$Yi == yi] = round(h, 4)
+
+    idx_xj = match(xj_sel, vn_all)
+    idx_yi = match(yi, vn_all)
+
+    U_Xs = U_all[, idx_xj, drop = FALSE]
+    u_Ys = U_all[, idx_yi]
+
+    u_prime = numeric(n)
+    for (i in seq_len(n)) {
+      idx_ref = if (leave_one_out) setdiff(seq_len(n), i) else seq_len(n)
+      u_prime[i] = Q_cond_kde(
+        u_Y = u_Ys[i],
+        u_X = U_Xs[i, ],
+        U_Xs = U_Xs[idx_ref, , drop = FALSE],
+        u_Ys = u_Ys[idx_ref],
+        h = h
+      )
+    }
+
+    Yi_vals = get_col(vars_all, yi)
+    Yprime_sobol[[yi]] = as.numeric(quantile(Yi_vals, probs = pmin(pmax(u_prime, 1e-6), 1 - 1e-6)))
+
+    U_check = pseudo_obs(cbind(Yi_vals, Yprime_sobol[[yi]]))
+    fit_check = bicop(U_check, family_set = "parametric", selcrit = "aic")
+    tau_cop = fit_check$tau
+    if (is.null(tau_cop) || !is.numeric(tau_cop)) {
+      tau_cop = cor(U_check[, 1], U_check[, 2], method = "kendall")
+    }
+
+    recap_sobol$famille_copule[recap_sobol$Yi == yi] = fit_check$family
+    recap_sobol$tau_copule[recap_sobol$Yi == yi] = round(tau_cop, 4)
+  }
+
+  # ============================================================
+  # 5) reconstruction Z et Shapley
+  # ============================================================
+  X3 = get_col(vars_all, "X3")
+  X4 = get_col(vars_all, "X4")
+  Z  = get_col(vars_all, "Z")
+
+  Y1p_tau = as.numeric(Yprime_tau[["Y1"]])
+  Y2p_tau = as.numeric(Yprime_tau[["Y2"]])
+  Y3p_tau = as.numeric(Yprime_tau[["Y3"]])
+
+  Y1p_sob = as.numeric(Yprime_sobol[["Y1"]])
+  Y2p_sob = as.numeric(Yprime_sobol[["Y2"]])
+  Y3p_sob = as.numeric(Yprime_sobol[["Y3"]])
+
+  Z_tau = g_fun(X3 = X3, X4 = X4, Y1 = Y1p_tau, Y2 = Y2p_tau, Y3 = Y3p_tau, omega = omega)
+  Z_sob = g_fun(X3 = X3, X4 = X4, Y1 = Y1p_sob, Y2 = Y2p_sob, Y3 = Y3p_sob, omega = omega)
+
+  tau_Z_tau = cor(Z, Z_tau, method = "kendall", use = "complete.obs")
+  tau_Z_sob = cor(Z, Z_sob, method = "kendall", use = "complete.obs")
+
+  h_5 = bandwidth_silverman(n, 5)
+  joueurs = c("Y1", "Y2", "Y3", "X3", "X4")
+
+  data_Y = data.frame(Y1 = get_col(vars_all, "Y1"), Y2 = get_col(vars_all, "Y2"),
+                      Y3 = get_col(vars_all, "Y3"), X3 = X3, X4 = X4)
+  model_Y_obj = make_kde_model(joueurs, data_Y, pseudo_obs_manual(data_Y), h_5, omega)
+
+  data_Ytau = data.frame(Y1 = Y1p_tau, Y2 = Y2p_tau, Y3 = Y3p_tau, X3 = X3, X4 = X4)
+  model_Ytau_obj = make_kde_model(joueurs, data_Ytau, pseudo_obs_manual(data_Ytau), h_5, omega)
+
+  data_Ysob = data.frame(Y1 = Y1p_sob, Y2 = Y2p_sob, Y3 = Y3p_sob, X3 = X3, X4 = X4)
+  model_Ysob_obj = make_kde_model(joueurs, data_Ysob, pseudo_obs_manual(data_Ysob), h_5, omega)
+
+  res_shapley_Y = shapleyPermEx(
+    model = function(X) predict_kde_model(model_Y_obj, X),
+    Xall = function(n_s) Xall_kde_model(model_Y_obj, n_s),
+    Xset = function(n_s, Sj, Sjc, xjc) Xset_kde_model(model_Y_obj, n_s, Sj, Sjc, xjc),
+    d = 5, Nv = n, No = No, Ni = Ni, colnames = joueurs
+  )
+
+  res_shapley_Ytau = shapleyPermEx(
+    model = function(X) predict_kde_model(model_Ytau_obj, X),
+    Xall = function(n_s) Xall_kde_model(model_Ytau_obj, n_s),
+    Xset = function(n_s, Sj, Sjc, xjc) Xset_kde_model(model_Ytau_obj, n_s, Sj, Sjc, xjc),
+    d = 5, Nv = n, No = No, Ni = Ni, colnames = joueurs
+  )
+
+  res_shapley_Ysob = shapleyPermEx(
+    model = function(X) predict_kde_model(model_Ysob_obj, X),
+    Xall = function(n_s) Xall_kde_model(model_Ysob_obj, n_s),
+    Xset = function(n_s, Sj, Sjc, xjc) Xset_kde_model(model_Ysob_obj, n_s, Sj, Sjc, xjc),
+    d = 5, Nv = n, No = No, Ni = Ni, colnames = joueurs
+  )
+
+  sh_Y = extract_shapley(res_shapley_Y)
+  sh_Ytau = extract_shapley(res_shapley_Ytau)
+  sh_Ysob = extract_shapley(res_shapley_Ysob)
+
+  df_compare_tau = data.frame(var = joueurs, shapley = sh_Ytau)
+
+  df_compare_sob =data.frame(var = joueurs, shapley = sh_Ysob)
+
+  # ============================================================
+  # 6) tableaux récapitulatifs
+  # ============================================================
+  out$mask_tau = mask_tau
+  out$mask_sobol = mask_sobol
+  out$recap_tau = recap_tau
+  out$recap_sobol = recap_sobol
+  out$Yprime_tau = Yprime_tau
+  out$Yprime_sobol = Yprime_sobol
+  out$Z_tau = Z_tau
+  out$Z_sob = Z_sob
+  out$tau_Z_tau = tau_Z_tau
+  out$tau_Z_sob = tau_Z_sob
+  out$res_shapley_Y = res_shapley_Y
+  out$res_shapley_Ytau = res_shapley_Ytau
+  out$res_shapley_Ysob = res_shapley_Ysob
+  out$df_compare_tau = df_compare_tau
+  out$df_compare_sob = df_compare_sob
+
+  # ============================================================
+  # 7) visualisations
+  # ============================================================
+  df_tau_mat = reshape2::melt(tau_XY)
+  colnames(df_tau_mat) = c("Xj", "Yi", "tau")
+  df_tau_mat$influent = abs(df_tau_mat$tau) > tau_threshold
+  df_tau_mat$influent[is.na(df_tau_mat$influent)] = FALSE
+  df_tau_mat$label = ifelse(is.na(df_tau_mat$tau), "", round(df_tau_mat$tau, 3))
+
+  p_tau = ggplot(df_tau_mat, aes(x = Yi, y = Xj, fill = tau)) +
+    geom_tile(color = "white", linewidth = 0.6) +
+    geom_text(aes(label = label), fontface = ifelse(!df_tau_mat$influent, "plain", "bold"), size = 3.2) +
+    geom_tile(data = dplyr::filter(df_tau_mat, !influent), aes(x = Yi, y = Xj),
+              fill = NA, color = "#ffffff", linewidth = 1.1, inherit.aes = FALSE) +
+    scale_fill_gradient2(low = "white", mid = "#91bfdb", high = "#d73027",
+                         midpoint = 0, limits = c(-1, 1), name = "τ Kendall") +
+    labs(title = paste0("Sélection Xj → Yi — seuil |τ| > ", tau_threshold),
+         subtitle = "τ de Kendall empirique", x = NULL, y = NULL) +
+    theme_minimal(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  df_sob_mat = reshape2::melt(sob_T)
+  colnames(df_sob_mat) = c("Xj", "Yi", "sobolT")
+  df_sob_mat$influent = df_sob_mat$sobolT > sob_threshold
+  df_sob_mat$influent[is.na(df_sob_mat$influent)] = FALSE
+  df_sob_mat$label = ifelse(is.na(df_sob_mat$sobolT), "", round(df_sob_mat$sobolT, 3))
+
+  p_sobol = ggplot(df_sob_mat, aes(x = Yi, y = Xj, fill = sobolT)) +
+    geom_tile(color = "white", linewidth = 0.6) +
+    geom_text(aes(label = label), fontface = ifelse(!df_sob_mat$influent, "plain", "bold"), size = 3.2) +
+    geom_tile(data = dplyr::filter(df_sob_mat, !influent), aes(x = Yi, y = Xj),
+              fill = NA, color = "#ffffff", linewidth = 1.1, inherit.aes = FALSE) +
+    scale_fill_gradient2(low = "white", mid = "#91bfdb", high = "#d73027",
+                         midpoint = 0, limits = c(0, 1), name = "T Sobol") +
+    labs(title = paste0("Sélection Xj → Yi — seuil T > ", sob_threshold),
+         subtitle = "Indices de Sobol totaux", x = NULL, y = NULL) +
+    theme_minimal(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  df_tauZ_tau = data.frame(
+    groupe = rep(c("Original", "Tau"), each = 4),
+    var = rep(c("Y1", "Y2", "Y3", "X4"), 2),
+    tau = c(
+      cor(Z, get_col(vars_all, "Y1"), method = "kendall"),
+      cor(Z, get_col(vars_all, "Y2"), method = "kendall"),
+      cor(Z, get_col(vars_all, "Y3"), method = "kendall"),
+      cor(Z, get_col(vars_all, "X4"), method = "kendall"),
+      cor(Z, Y1p_tau, method = "kendall"),
+      cor(Z, Y2p_tau, method = "kendall"),
+      cor(Z, Y3p_tau, method = "kendall"),
+      cor(Z, get_col(vars_all, "X4"), method = "kendall")
+    )
+  )
+
+  p_tauZ = ggplot(df_tauZ_tau, aes(x = var, y = tau, fill = groupe)) +
+    geom_col(position = "dodge") +
+    geom_text(aes(label = round(tau, 3)),
+              position = position_dodge(width = 0.9), vjust = -0.4, size = 3) +
+    scale_fill_brewer(palette = "Set2") +
+    labs(title = "τ(Z, .) — Original vs reconstruction tau",
+         x = NULL, y = "τ", fill = NULL) +
+    theme_minimal(base_size = 12)
+
+  df_tauZ_sob = data.frame(
+    groupe = rep(c("Original", "Sobol"), each = 4),
+    var = rep(c("Y1", "Y2", "Y3", "X4"), 2),
+    tau = c(
+      cor(Z, get_col(vars_all, "Y1"), method = "kendall"),
+      cor(Z, get_col(vars_all, "Y2"), method = "kendall"),
+      cor(Z, get_col(vars_all, "Y3"), method = "kendall"),
+      cor(Z, get_col(vars_all, "X4"), method = "kendall"),
+      cor(Z, Y1p_sob, method = "kendall"),
+      cor(Z, Y2p_sob, method = "kendall"),
+      cor(Z, Y3p_sob, method = "kendall"),
+      cor(Z, get_col(vars_all, "X4"), method = "kendall")
+    )
+  )
+
+  p_tauZ_sob = ggplot(df_tauZ_sob, aes(x = var, y = tau, fill = groupe)) +
+    geom_col(position = "dodge") +
+    geom_text(aes(label = round(tau, 3)),
+              position = position_dodge(width = 0.9), vjust = -0.4, size = 3) +
+    scale_fill_brewer(palette = "Set2") +
+    labs(title = "τ(Z, .) — Original vs reconstruction Sobol",
+         x = NULL, y = "τ", fill = NULL) +
+    theme_minimal(base_size = 12)
+
+  p3_sob <- ggplot(df_compare_sob, aes(x = var, y = shapley)) +
+  geom_col(fill = "grey70", width = 0.7) +
+  geom_text(aes(label = round(shapley, 4)),
+            vjust = -0.4, size = 3) +
+  labs(
+    title = "Valeurs de Shapley — (Y',X3,X4)→Z",
+    subtitle = "Variables influentes choisies par Sobol",
+    y = "Valeurs de Shapley",
+    x = NULL
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(legend.position = "none")
+
+  out$plots = list(
+    p_tau = p_tau,
+    p_sobol = p_sobol,
+    p_tauZ = p_tauZ,
+    p_tauZ_sob = p_tauZ_sob,
+    p_shapley_sob = p3_sob
+  )
+
+  out
+}
+```
+
+### Système en cascade
+
+```{r}
+
+library(rvinecopulib)
+library(sensitivity)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(patchwork)
+
+set.seed(443)
+n = 10000
+
+# ── Noms des entrées globales ─────────────────────────────────────────────────
+X_names = paste0("X", 1:16)
+
+# ── Génération des entrées globales U[0,1] ────────────────────────────────────
+X_mat = matrix(runif(n * 16), nrow = n, ncol = 16,
+               dimnames = list(NULL, X_names))
+X_df  = as.data.frame(X_mat)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SOUS-MODÈLES
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Solver 1 : G-function ─────────────────────────────────────────────────────
+a_gfun = c(12, 2, 3, 4, 45)
+
+solver1 = function(X) {
+  apply(X, 1, function(xrow)
+    prod(sapply(seq_along(a_gfun), function(k)
+      (abs(4*xrow[k] - 2) + a_gfun[k]) / (1 + a_gfun[k])))
+  )
+}
+
+# ── Solver 2 : Ishigami ───────────────────────────────────────────────────────
+solver2 = function(Y1, X6, X7)
+  sin(Y1) + 7*sin(X6)^2 + 0.1*X7^4*sin(Y1)
+
+# ── Solver 3 : polynôme + arctan ─────────────────────────────────────────────
+solver3 = function(Y2, X8, X9, X10, X11, X12)
+  X9^2 * atan(1 - X12) + X10*X11*X8^3 + 3*Y2
+
+# ── Solver 4 (sortie Z) : sinus + produit ────────────────────────────────────
+solver4 = function(Y3, X13, X14, X15, X16)
+  sin(X16)*X15 + Y3*X13 + X14
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CALCUL DES NIVEAUX
+# ══════════════════════════════════════════════════════════════════════════════
+
+Y1 = solver1(X_mat[, 1:5, drop = FALSE])
+Y2 = solver2(Y1, X_mat[,"X6"], X_mat[,"X7"])
+Y3 = solver3(Y2, X_mat[,"X8"], X_mat[,"X9"],
+             X_mat[,"X10"], X_mat[,"X11"], X_mat[,"X12"])
+Z  = solver4(Y3, X_mat[,"X13"], X_mat[,"X14"],
+             X_mat[,"X15"], X_mat[,"X16"])
+
+cat("── Statistiques ──\n")
+cat("Y1 : mean =", round(mean(Y1),4), "| sd =", round(sd(Y1),4), "\n")
+cat("Y2 : mean =", round(mean(Y2),4), "| sd =", round(sd(Y2),4), "\n")
+cat("Y3 : mean =", round(mean(Y3),4), "| sd =", round(sd(Y3),4), "\n")
+cat("Z  : mean =", round(mean(Z), 4), "| sd =", round(sd(Z), 4),  "\n")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# FONCTIONS AUXILIAIRES
+# ══════════════════════════════════════════════════════════════════════════════
+
+bandwidth_silverman = function(n, d) n^(-1/(d+4))
+
+pseudo_obs_manual = function(x) {
+  m = apply(as.matrix(x), 2, function(col) rank(col)/(length(col)+1))
+  colnames(m) = colnames(as.matrix(x))
+  m
+}
+
+K_gauss = function(u, U_ref, h) {
+  nr = nrow(U_ref); w = numeric(nr)
+  for (k in seq_len(nr))
+    w[k] = prod(dnorm(u - U_ref[k,], 0, h))
+  w
+}
+
+F_cond_kde = function(v, u_X, U_Xs, u_Ys, h) {
+  w = K_gauss(u_X, U_Xs, h); ws = sum(w)
+  if (is.na(ws) || ws < 1e-12) return(v)
+  sum(w * (u_Ys <= v), na.rm = TRUE) / ws
+}
+
+Q_cond_kde = function(u_Y, u_X, U_Xs, u_Ys, h, tol = 1e-4) {
+  f  = function(v) F_cond_kde(v, u_X, U_Xs, u_Ys, h) - u_Y
+  f0 = f(tol); f1 = f(1 - tol)
+  if (is.na(f0) || is.na(f1) || sign(f0) == sign(f1)) {
+    grid = seq(tol, 1 - tol, length.out = 200)
+    return(grid[which.min(abs(sapply(grid, f)))])
+  }
+  uniroot(f, lower = tol, upper = 1 - tol, tol = tol)$root
+}
+
+sample_cond_kde = function(Ni_s, U_tgt, U_cnd, x_cnd, h) {
+  nr = nrow(U_cnd)
+  if (is.null(x_cnd) || length(x_cnd) == 0L) {
+    idx = sample(nr, Ni_s, replace = TRUE)
+    return(list(idx = idx, vals = U_tgt[idx, , drop = FALSE]))
+  }
+  w = K_gauss(x_cnd, U_cnd, h); ws = sum(w)
+  idx = if (ws < 1e-12) sample(nr, Ni_s, replace = TRUE) else
+        sample(nr, Ni_s, replace = TRUE, prob = w / ws)
+  list(idx = idx, vals = U_tgt[idx, , drop = FALSE])
+}
+
+construire_Yprime = function(Y_vec, U_cond, u_Y, h, n_obs, nm = "Y") {
+  u_p = numeric(n_obs)
+  cat("  Construction", nm, "| h =", round(h, 4), "...\n")
+  pct = unique(pmax(1L, floor(seq(1, n_obs, length.out = 11))))
+  for (i in seq_len(n_obs)) {
+    if (i %in% pct) cat(round(100 * i / n_obs), "%  ", sep = "")
+    ref = setdiff(seq_len(n_obs), i)
+    u_p[i] = Q_cond_kde(u_Y[i], U_cond[i, ],
+                        U_cond[ref, , drop = FALSE], u_Y[ref], h)
+  }; cat("\n")
+  as.numeric(quantile(Y_vec, probs = pmin(pmax(u_p, 1e-6), 1 - 1e-6)))
+}
+
+diagnostic_copule = function(Y_orig, Y_prime, nm = "Y") {
+  tau_e = cor(Y_orig, Y_prime, method = "kendall", use = "complete.obs")
+  Uc    = pseudo_obs(cbind(Y_orig, Y_prime))
+  fit   = bicop(Uc, family_set = "parametric", selcrit = "aic")
+  tc    = fit$tau
+  if (is.null(tc) || !is.numeric(tc))
+    tc  = cor(Uc[,1], Uc[,2], method = "kendall")
+  cat("  τ(", nm, ",", nm, "') =", round(tau_e, 4),
+      "| copule:", fit$family, "| τ_cop =", round(tc, 4), "\n")
+  list(tau_emp = round(tau_e, 4), famille = fit$family, tau_cop = round(tc, 4))
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ÉTAPE 1 : Sobol X → Y1 (niveau 1)
+# ══════════════════════════════════════════════════════════════════════════════
+
+cat("\n════ ÉTAPE 1 : Sobol X1..X5 → Y1 (G-function) ════\n")
+
+n_half = floor(n / 2)
+X1_5   = X_mat[, 1:5, drop = FALSE]
+colnames(X1_5) = paste0("X", 1:5)
+
+sob_Y1 = sobolmartinez(model = solver1,
+                   X1 = X1_5[(n_half + 1):n, , drop = FALSE],
+                   X2 = X1_5[1:n_half, , drop = FALSE],
+                   nboot = 0)
+
+cat("Indices Sobol ST (X → Y1) :\n")
+print(round(sob_Y1$T$original, 4))
+
+delta_S = 0.2
+mask_Y1 = paste0("X", which(sob_Y1$T$original > delta_S))
+cat("Xj influents sur Y1 (S^T >", delta_S, ") :",
+    paste(mask_Y1, collapse = ", "), "\n")
+
+# Construction Y1'
+U_all = pseudo_obs_manual(cbind(X_df, Y1 = Y1, Y2 = Y2, Y3 = Y3, Z = Z))
+idx_xj_Y1 = match(mask_Y1, colnames(U_all))
+idx_y1    = match("Y1", colnames(U_all))
+
+h_Y1 = bandwidth_silverman(n, length(mask_Y1))
+Y1p  = construire_Yprime(Y1, U_all[, idx_xj_Y1, drop = FALSE],
+                         U_all[, idx_y1], h_Y1, n, nm = "Y1")
+diag_Y1 = diagnostic_copule(Y1, Y1p, nm = "Y1")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ÉTAPE 2 : Shapley (Y1', X6, X7) → Y2, puis construction Y2'
+# ══════════════════════════════════════════════════════════════════════════════
+
+cat("\n════ ÉTAPE 2 : Shapley (Y1', X6, X7) → Y2 ════\n")
+
+data_Y2 = data.frame(Y1p = Y1p,
+                     X6   = X_mat[,"X6"],
+                     X7   = X_mat[,"X7"])
+joueurs_Y2 = colnames(data_Y2)
+d_Y2       = length(joueurs_Y2)
+h_Y2_kde   = bandwidth_silverman(n, d_Y2)
+
+U_Y2 = pseudo_obs_manual(data_Y2)
+u_y2 = pseudo_obs_manual(data.frame(Y2 = Y2))[, 1]
+
+# Modèle KDE : E[Y2 | joueurs_Y2 = x]
+model_Y2 = function(Xn) {
+  Xn = as.matrix(Xn)
+  apply(Xn, 1, function(xr) {
+    ux = pmin(pmax(sapply(seq_len(d_Y2), function(k)
+                mean(data_Y2[, k] <= xr[k])), 1e-6), 1 - 1e-6)
+    w = K_gauss(ux, U_Y2, h_Y2_kde); ws = sum(w)
+    if (ws < 1e-12) return(mean(Y2))
+    sum(w * Y2) / ws
+  })
+}
+
+Xall_Y2 = function(ns) {
+  idx = sample(n, ns, replace = TRUE)
+  as.matrix(data_Y2[idx, , drop = FALSE])
+}
+
+Xset_Y2 = function(ns, Sj, Sjc, xjc) {
+  if (length(Sjc) == 0L) {
+    idx = sample(n, ns, replace = TRUE)
+    om  = as.matrix(data_Y2[idx, Sj, drop = FALSE])
+    colnames(om) = joueurs_Y2[Sj]; return(om)
+  }
+  u_Sjc = pmin(pmax(sapply(seq_along(Sjc), function(k)
+               mean(data_Y2[, Sjc[k]] <= xjc[k])), 1e-6), 1 - 1e-6)
+  draw  = sample_cond_kde(ns,
+                          U_Y2[, Sj, drop = FALSE],
+                          U_Y2[, Sjc, drop = FALSE],
+                          u_Sjc, h_Y2_kde)
+  om = matrix(NA_real_, nrow = ns, ncol = length(Sj))
+  colnames(om) = joueurs_Y2[Sj]
+  for (k in seq_along(Sj)) {
+    cr = data_Y2[, Sj[k]]
+    om[, k] = quantile(cr, probs = pmin(pmax(draw$vals[, k], 1e-6), 1 - 1e-6))
+  }
+  om
+}
+
+set.seed(443)
+res_sh_Y2 = shapleyPermEx(
+  model    = model_Y2,
+  Xall     = Xall_Y2,
+  Xset     = Xset_Y2,
+  d        = d_Y2,
+  Nv       = n,
+  No       = 50,
+  Ni       = 3,
+  colnames = joueurs_Y2
+)
+
+get_s = function(mat, col) {
+  m = as.matrix(mat)
+  if (ncol(m) >= col) as.numeric(m[, col]) else rep(NA_real_, nrow(m))
+}
+
+sh_Y2_est = get_s(res_sh_Y2$Shapley, 1)
+names(sh_Y2_est) = joueurs_Y2
+cat("Valeurs de Shapley (Y1', X6, X7) → Y2 :\n")
+print(round(sh_Y2_est, 4))
+
+# Seuil Shapley (par exemple 0.10)
+delta_Sh_Y2 = 0.10
+mask_Y2 = joueurs_Y2[sh_Y2_est > delta_Sh_Y2]
+cat("Joueurs retenus pour Y2 (Shapley >", delta_Sh_Y2, ") :",
+    paste(mask_Y2, collapse = ", "), "\n")
+
+# Construction Y2'
+idx_xj_Y2 = match(mask_Y2, colnames(U_all))
+idx_y2    = match("Y2", colnames(U_all))
+
+h_Y2 = bandwidth_silverman(n, length(mask_Y2))
+Y2p  = construire_Yprime(Y2, U_all[, idx_xj_Y2, drop = FALSE],
+                         U_all[, idx_y2], h_Y2, n, nm = "Y2")
+diag_Y2 = diagnostic_copule(Y2, Y2p, nm = "Y2")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ÉTAPE 3 : Shapley (Y2', X8..X12) → Y3, puis construction Y3'
+# ══════════════════════════════════════════════════════════════════════════════
+
+cat("\n════ ÉTAPE 3 : Shapley (Y2', X8..X12) → Y3 ════\n")
+
+data_Y3 = data.frame(Y2p = Y2p,
+                     X8   = X_mat[,"X8"],
+                     X9   = X_mat[,"X9"],
+                     X10  = X_mat[,"X10"],
+                     X11  = X_mat[,"X11"],
+                     X12  = X_mat[,"X12"])
+joueurs_Y3 = colnames(data_Y3)
+d_Y3       = length(joueurs_Y3)
+h_Y3_kde   = bandwidth_silverman(n, d_Y3)
+
+U_Y3 = pseudo_obs_manual(data_Y3)
+u_y3 = pseudo_obs_manual(Y3)
+
+# ── Suite à partir de l'étape 3 ────────────────────────────────────────────────
+
+# Modèle KDE : E[Y3 | joueurs_Y3 = x]
+model_Y3 = function(Xn) {
+  Xn = as.matrix(Xn)
+  apply(Xn, 1, function(xr) {
+    ux = pmin(pmax(sapply(seq_len(d_Y3), function(k)
+                mean(data_Y3[, k] <= xr[k])), 1e-6), 1 - 1e-6)
+    w = K_gauss(ux, U_Y3, h_Y3_kde); ws = sum(w)
+    if (ws < 1e-12) return(mean(Y3))
+    sum(w * Y3) / ws
+  })
+}
+
+Xall_Y3 = function(ns) {
+  idx = sample(n, ns, replace = TRUE)
+  as.matrix(data_Y3[idx, , drop = FALSE])
+}
+
+Xset_Y3 = function(ns, Sj, Sjc, xjc) {
+  if (length(Sjc) == 0L) {
+    idx = sample(n, ns, replace = TRUE)
+    om  = as.matrix(data_Y3[idx, Sj, drop = FALSE])
+    colnames(om) = joueurs_Y3[Sj]; return(om)
+  }
+  u_Sjc = pmin(pmax(sapply(seq_along(Sjc), function(k)
+               mean(data_Y3[, Sjc[k]] <= xjc[k])), 1e-6), 1 - 1e-6)
+  draw  = sample_cond_kde(ns,
+                          U_Y3[, Sj, drop = FALSE],
+                          U_Y3[, Sjc, drop = FALSE],
+                          u_Sjc, h_Y3_kde)
+  om = matrix(NA_real_, nrow = ns, ncol = length(Sj))
+  colnames(om) = joueurs_Y3[Sj]
+  for (k in seq_along(Sj)) {
+    cr = data_Y3[, Sj[k]]
+    om[, k] = quantile(cr, probs = pmin(pmax(draw$vals[, k], 1e-6), 1 - 1e-6))
+  }
+  om
+}
+
+set.seed(443)
+res_sh_Y3 = shapleyPermEx(
+  model    = model_Y3,
+  Xall     = Xall_Y3,
+  Xset     = Xset_Y3,
+  d        = d_Y3,
+  Nv       = n,
+  No       = 50,
+  Ni       = 3,
+  colnames = joueurs_Y3
+)
+
+sh_Y3_est = get_s(res_sh_Y3$Shapley, 1)
+names(sh_Y3_est) = joueurs_Y3
+cat("Valeurs de Shapley (Y2', X8..X12) → Y3 :\n")
+print(round(sh_Y3_est, 4))
+
+delta_Sh_Y3 = 0.1
+mask_Y3 = joueurs_Y3[sh_Y3_est > delta_Sh_Y3]
+cat("Joueurs retenus pour Y3 (Shapley >", delta_Sh_Y3, ") :",
+    paste(mask_Y3, collapse = ", "), "\n")
+
+# Construction Y3'
+idx_xj_Y3 = match(mask_Y3, colnames(U_all))
+idx_y3    = match("Y3", colnames(U_all))
+
+h_Y3 = bandwidth_silverman(n, length(mask_Y3))
+Y3p  = construire_Yprime(Y3, U_all[, idx_xj_Y3, drop = FALSE],
+                         U_all[, idx_y3], h_Y3, n, nm = "Y3")
+diag_Y3 = diagnostic_copule(Y3, Y3p, nm = "Y3")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RECONSTRUCTION Z' et diagnostic
+# ══════════════════════════════════════════════════════════════════════════════
+
+cat("\n════ Reconstruction Z' ════\n")
+
+Zprime   = solver4(Y3p, X_mat[,"X13"], X_mat[,"X14"],
+                   X_mat[,"X15"], X_mat[,"X16"])
+tau_ZZp  = cor(Z, Zprime, method = "kendall", use = "complete.obs")
+delta_Z  = (Zprime - Z) / ifelse(Z == 0, NA, Z)
+
+Uc_ZZp   = pseudo_obs(cbind(Z, Zprime))
+fit_ZZp  = bicop(Uc_ZZp, family_set = "parametric", selcrit = "aic")
+tau_cop_ZZp = fit_ZZp$tau
+if (is.null(tau_cop_ZZp) || !is.numeric(tau_cop_ZZp))
+  tau_cop_ZZp = cor(Uc_ZZp[,1], Uc_ZZp[,2], method = "kendall")
+
+cat("τ(Z, Z') =", round(tau_ZZp, 4), "\n")
+cat("Copule Z~Z' :", fit_ZZp$family, "| τ_cop =", round(tau_cop_ZZp, 4), "\n")
+cat("Erreur relative mean|δZ| =",
+    round(mean(abs(delta_Z), na.rm = TRUE), 4), "\n")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ÉTAPE 4 : Analyse directe X → Z (KDE + Shapley)
+# ══════════════════════════════════════════════════════════════════════════════
+
+cat("\n════ ÉTAPE 4 : Analyse directe X → Z ════\n")
+
+# On utilise toutes les entrées X1..X16 comme joueurs
+joueurs_XZ = X_names
+d_XZ       = length(joueurs_XZ)
+h_XZ_kde   = bandwidth_silverman(n, d_XZ)
+
+U_XZ = pseudo_obs_manual(X_df)
+u_z  = pseudo_obs_manual(data.frame(Z = Z))[, 1]
+
+# Modèle KDE : E[Z | X_S = x]
+model_XZ = function(Xn) {
+  Xn = as.matrix(Xn)
+  apply(Xn, 1, function(xr) {
+    ux = pmin(pmax(sapply(seq_len(d_XZ), function(k)
+                mean(X_df[, k] <= xr[k])), 1e-6), 1 - 1e-6)
+    w = K_gauss(ux, U_XZ, h_XZ_kde); ws = sum(w)
+    if (ws < 1e-12) return(mean(Z))
+    sum(w * Z) / ws
+  })
+}
+
+Xall_XZ = function(ns) {
+  idx = sample(n, ns, replace = TRUE)
+  as.matrix(X_df[idx, , drop = FALSE])
+}
+
+Xset_XZ = function(ns, Sj, Sjc, xjc) {
+  if (length(Sjc) == 0L) {
+    idx = sample(n, ns, replace = TRUE)
+    om  = as.matrix(X_df[idx, Sj, drop = FALSE])
+    colnames(om) = joueurs_XZ[Sj]; return(om)
+  }
+  u_Sjc = pmin(pmax(sapply(seq_along(Sjc), function(k)
+               mean(X_df[, Sjc[k]] <= xjc[k])), 1e-6), 1 - 1e-6)
+  draw  = sample_cond_kde(ns,
+                          U_XZ[, Sj, drop = FALSE],
+                          U_XZ[, Sjc, drop = FALSE],
+                          u_Sjc, h_XZ_kde)
+  om = matrix(NA_real_, nrow = ns, ncol = length(Sj))
+  colnames(om) = joueurs_XZ[Sj]
+  for (k in seq_along(Sj)) {
+    cr = X_df[, Sj[k]]
+    om[, k] = quantile(cr, probs = pmin(pmax(draw$vals[, k], 1e-6), 1 - 1e-6))
+  }
+  om
+}
+
+# Ici, d = 16 → 16! trop grand → on utilise shapleyPermRand (MC sur m permutations)
+set.seed(443)
+res_sh_XZ = shapleyPermRand(
+  model    = model_XZ,
+  Xall     = Xall_XZ,
+  Xset     = Xset_XZ,
+  d        = d_XZ,
+  Nv       = n,
+  m        = 200,
+  No       = 50,
+  Ni       = 3,
+  colnames = joueurs_XZ
+)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TABLEAUX RÉCAPITULATIFS
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Tableau 1 : diagnostic Yi → Yi' ─────────────────────────────────────────
+tab_diag = data.frame(
+  Solver      = c("Solver 1", "Solver 2", "Solver 3"),
+  Yi          = c("Y1", "Y2", "Y3"),
+  Modele      = c("G-function", "Ishigami", "Polynôme+arctan"),
+  Xj_retenus  = c(paste(mask_Y1, collapse = ","),
+                  paste(mask_Y2, collapse = ","),
+                  paste(mask_Y3, collapse = ",")),
+  h           = round(c(h_Y1, h_Y2, h_Y3), 4),
+  tau_Yi_Yip  = c(diag_Y1$tau_emp, diag_Y2$tau_emp, diag_Y3$tau_emp),
+  copule      = c(diag_Y1$famille, diag_Y2$famille, diag_Y3$famille),
+  tau_cop     = c(diag_Y1$tau_cop, diag_Y2$tau_cop, diag_Y3$tau_cop),
+  stringsAsFactors = FALSE
+)
+
+cat("\n══ Tableau 1 — Diagnostic Yi → Yi' ══\n")
+print(tab_diag, row.names = FALSE)
+
+# ── Tableau 2 : Shapley final (Y3', X13..X16) → Z ───────────────────────────
+# (optionnel, si tu veux aussi ce niveau intermédiaire)
+joueurs_Z = c("Y3p", "X13", "X14", "X15", "X16")
+d_Z       = length(joueurs_Z)
+h_Z_kde   = bandwidth_silverman(n, d_Z)
+
+data_Z    = data.frame(Y3p = Y3p,
+                       X13  = X_mat[,"X13"],
+                       X14  = X_mat[,"X14"],
+                       X15  = X_mat[,"X15"],
+                       X16  = X_mat[,"X16"])
+
+U_Z = pseudo_obs_manual(data_Z)
+u_zZ = pseudo_obs_manual(data.frame(Z = Z))[, 1]
+
+model_Z = function(Xn) {
+  Xn = as.matrix(Xn)
+  apply(Xn, 1, function(xr) {
+    ux = pmin(pmax(sapply(seq_len(d_Z), function(k)
+                mean(data_Z[, k] <= xr[k])), 1e-6), 1 - 1e-6)
+    w = K_gauss(ux, U_Z, h_Z_kde); ws = sum(w)
+    if (ws < 1e-12) return(mean(Z))
+    sum(w * Z) / ws
+  })
+}
+
+Xall_Z = function(ns) {
+  idx = sample(n, ns, replace = TRUE)
+  as.matrix(data_Z[idx, , drop = FALSE])
+}
+
+Xset_Z = function(ns, Sj, Sjc, xjc) {
+  if (length(Sjc) == 0L) {
+    idx = sample(n, ns, replace = TRUE)
+    om  = as.matrix(data_Z[idx, Sj, drop = FALSE])
+    colnames(om) = joueurs_Z[Sj]; return(om)
+  }
+  u_Sjc = pmin(pmax(sapply(seq_along(Sjc), function(k)
+               mean(data_Z[, Sjc[k]] <= xjc[k])), 1e-6), 1 - 1e-6)
+  draw  = sample_cond_kde(ns,
+                          U_Z[, Sj, drop = FALSE],
+                          U_Z[, Sjc, drop = FALSE],
+                          u_Sjc, h_Z_kde)
+  om = matrix(NA_real_, nrow = ns, ncol = length(Sj))
+  colnames(om) = joueurs_Z[Sj]
+  for (k in seq_along(Sj)) {
+    cr = data_Z[, Sj[k]]
+    om[, k] = quantile(cr, probs = pmin(pmax(draw$vals[, k], 1e-6), 1 - 1e-6))
+  }
+  om
+}
+
+set.seed(443)
+res_sh_Z = shapleyPermEx(
+  model    = model_Z,
+  Xall     = Xall_Z,
+  Xset     = Xset_Z,
+  d        = d_Z,
+  Nv       = n,
+  No       = 50,
+  Ni       = 3,
+  colnames = joueurs_Z
+)
+
+tau_Xj_Z = sapply(joueurs_Z, function(j)
+  cor(data_Z[[j]], Z, method = "kendall", use = "complete.obs"))
+
+tab_sh = data.frame(
+  joueur      = joueurs_Z,
+  nature      = c("Y3' (enrichi)", rep("X direct", 4)),
+  tau_Z       = round(tau_Xj_Z, 4),
+  shapley_est = round(get_s(res_sh_Z$Shapley, 1), 4),
+  shapley_se  = round(get_s(res_sh_Z$Shapley, 3), 4),
+  shapley_lo  = round(get_s(res_sh_Z$Shapley, 1) -
+                      1.96 * get_s(res_sh_Z$Shapley, 3), 4),
+  shapley_hi  = round(get_s(res_sh_Z$Shapley, 1) +
+                      1.96 * get_s(res_sh_Z$Shapley, 3), 4),
+  sobol1      = round(get_s(res_sh_Z$SobolS, 1), 4),
+  sobolT      = round(get_s(res_sh_Z$SobolT, 1), 4),
+  stringsAsFactors = FALSE
+)
+
+cat("\n══ Tableau 2 — Shapley (Y3', X13..X16) → Z ══\n")
+print(tab_sh, row.names = FALSE)
+
+# ── Tableau 3 : Shapley direct X → Z ─────────────────────────────────────────
+tau_Xj_Z_direct = sapply(joueurs_XZ, function(j)
+  cor(X_df[[j]], Z, method = "kendall", use = "complete.obs"))
+
+tab_sh_XZ = data.frame(
+  joueur      = joueurs_XZ,
+  nature      = "X direct",
+  tau_Z       = round(tau_Xj_Z_direct, 4),
+  shapley_est = round(get_s(res_sh_XZ$Shapley, 1), 4),
+  shapley_se  = round(get_s(res_sh_XZ$Shapley, 3), 4),
+  shapley_lo  = round(get_s(res_sh_XZ$Shapley, 1) -
+                      1.96 * get_s(res_sh_XZ$Shapley, 3), 4),
+  shapley_hi  = round(get_s(res_sh_XZ$Shapley, 1) +
+                      1.96 * get_s(res_sh_XZ$Shapley, 3), 4),
+  sobol1      = round(get_s(res_sh_XZ$SobolS, 1), 4),
+  sobolT      = round(get_s(res_sh_XZ$SobolT, 1), 4),
+  stringsAsFactors = FALSE
+)
+
+cat("\n══ Tableau 3 — Shapley direct X → Z ══\n")
+print(tab_sh_XZ, row.names = FALSE)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# VISUALISATION — 4 niveaux + analyse directe X → Z
+# ══════════════════════════════════════════════════════════════════════════════
+
+df_sob_Y1 = data.frame(
+var = paste0("X", 1:5),
+S1 = sob_Y1$S$original,
+ST = sob_Y1$T$original
+) %>% pivot_longer(cols = c(S1, ST), names_to = "type", values_to = "val")
+
+p1 = ggplot(df_sob_Y1, aes(x = var, y = val, fill = type)) +
+geom_col(position = "dodge", width = 0.65) +
+scale_fill_brewer(palette = "Set2") +
+labs(title = "Niveau 1 — X → Y1 (Sobol)",
+y = "Indice", x = NULL, fill = NULL) +
+theme_minimal(base_size = 11) +
+theme(legend.position = "bottom")
+# ── p2 : Shapley Y1' → Y2 ────────────────────────────────────────────────────
+df_sh_Y1Y2 = data.frame(
+  joueur = joueurs_Y2,
+  shapley = sh_Y2_est
+) %>% mutate(joueur = factor(joueur, levels = joueur))
+
+p2 = ggplot(df_sh_Y1Y2, aes(x = joueur, y = shapley)) +
+  geom_col(fill = "steelblue", width = 0.65) +
+  labs(title = "Niveau 2 — Y1' → Y2 (Shapley)",
+       y = "Valeur de Shapley", x = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# ── p3 : Shapley Y2' → Y3 ────────────────────────────────────────────────────
+df_sh_Y2Y3 = data.frame(
+  joueur = joueurs_Y3,
+  shapley = sh_Y3_est
+) %>% mutate(joueur = factor(joueur, levels = joueur))
+
+p3 = ggplot(df_sh_Y2Y3, aes(x = joueur, y = shapley)) +
+  geom_col(fill = "steelblue", width = 0.65) +
+  labs(title = "Niveau 3 — Y2' → Y3 (Shapley)",
+       y = "Valeur de Shapley", x = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# ── p4 : Shapley Y3' → Z ─────────────────────────────────────────────────────
+df_sh_Y3Z = data.frame(
+  joueur = joueurs_Z,
+  shapley = tab_sh$shapley_est,
+  se = tab_sh$shapley_se
+) %>% mutate(
+  lo = shapley - 1.96 * se,
+  hi = shapley + 1.96 * se,
+  joueur = factor(joueur, levels = joueur)
+)
+
+p4 = ggplot(df_sh_Y3Z, aes(x = joueur, y = shapley)) +
+  geom_col(fill = "steelblue", width = 0.65) +
+  geom_text(aes(label = round(shapley, 3)),
+            vjust = -0.5, size = 2.8) +
+  labs(title = "Niveau 4 — Y3' → Z (Shapley)",
+       y = "Valeur de Shapley", x = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# ── p5 : Analyse directe X → Z (Shapley) ─────────────────────────────────────
+df_sh_XZ = data.frame(
+  joueur = joueurs_XZ,
+  shapley = tab_sh_XZ$shapley_est,
+  se = tab_sh_XZ$shapley_se
+) %>% mutate(
+  lo = shapley - 1.96 * se,
+  hi = shapley + 1.96 * se,
+  joueur = reorder(joueur, shapley)
+)
+
+p5 = ggplot(df_sh_XZ, aes(x = joueur, y = shapley)) +
+  geom_col(fill = "darkorange", width = 0.65) +
+  geom_text(aes(label = round(shapley, 3)),
+            vjust = -0.5, size = 2.5, angle = 45) +
+  labs(title = "Analyse directe X → Z (Shapley)",
+       subtitle = paste0("n=", n, " | m=200 perm | No=50 | Ni=3"),
+       y = "Valeur de Shapley", x = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p1
+p2
+p3
+p4
+p5
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ÉTAPE 5 — Sobol RÉEL X → Z (chaîne complète, pas le modèle KDE)
+#           puis comparaison avec l'approche Shapley+KDE de l'ÉTAPE 4
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Fonction chaîne complète (les 4 solveurs enchaînés) ───────────────────────
+# Reprend exactement solver1→solver2→solver3→solver4, appliquée à une matrice
+# de plan d'expérience X (n x 16) comme l'attend `sensitivity::tell`.
+
+full_chain = function(X) {
+  X = as.matrix(X)
+  y1 = solver1(X[, 1:5, drop = FALSE])
+  y2 = solver2(y1, X[, 6], X[, 7])
+  y3 = solver3(y2, X[, 8], X[, 9], X[, 10], X[, 11], X[, 12])
+  solver4(y3, X[, 13], X[, 14], X[, 15], X[, 16])
+}
+
+cat("\n════ ÉTAPE 5 : Sobol réel X1..X16 → Z (chaîne complète) ════\n")
+
+set.seed(443)
+sob_Z_real = sobolSalt(model = NULL,
+                       X1 = X_mat[(n_half + 1):n, , drop = FALSE],
+                       X2 = X_mat[1:n_half, , drop = FALSE],
+                       nboot = 0)
+sob_Z_real = tell(sob_Z_real, full_chain(sob_Z_real$X))
+
+cat("Indices Sobol réels (X → Z) :\n")
+tab_sob_real = data.frame(
+  joueur = X_names,
+  S1     = round(sob_Z_real$S$original, 4),
+  ST     = round(sob_Z_real$T$original, 4)
+)
+print(tab_sob_real, row.names = FALSE)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# COMPARAISON : modèle KDE+Shapley (res_sh_XZ) vs Sobol réel sur Z
+# ══════════════════════════════════════════════════════════════════════════════
+
+df_compare = data.frame(
+  joueur       = joueurs_XZ,
+  Shapley_kde  = round(get_s(res_sh_XZ$Shapley, 1), 4),
+  S1_reel      = round(sob_Z_real$S$original, 4),
+  ST_reel      = round(sob_Z_real$T$original, 4)
+)
+
+cat("\n══ Tableau comparatif — modèle KDE (Étape 4) vs Sobol réel sur Z ══\n")
+print(df_compare, row.names = FALSE)
+
+
+
+# ── Mise en forme longue pour le barplot ──────────────────────────────────────
+df_plot_compare = df_compare %>%
+  pivot_longer(cols = c(Shapley_kde, S1_reel, ST_reel),
+               names_to = "indice_brut", values_to = "valeur") %>%
+  mutate(
+    methode = ifelse(grepl("kde$", indice_brut), "Modèle KDE + Shapley (Z')", "Sobol réel (Z)"),
+    indice  = case_when(
+      grepl("^Shapley", indice_brut) ~ "Shapley",
+      grepl("^S1",      indice_brut) ~ "S1",
+      grepl("^ST",      indice_brut) ~ "ST"
+    ),
+    methode = factor(methode, levels = c("Modèle KDE + Shapley (Z')", "Sobol réel (Z)")),
+    joueur  = factor(joueur, levels = X_names)
+  )
+
+p5 = ggplot(df_plot_compare, aes(x = joueur, y = valeur, fill = indice)) +
+  geom_col(position = "dodge", width = 0.7) +
+  facet_wrap(~ methode, ncol = 1) +
+  scale_fill_manual(values = c("Shapley" = "#5e4fa2", "S1" = "#66c2a5", "ST" = "#f46d43")) +
+  labs(title = "Comparaison : sensibilité estimée (KDE+Shapley) vs Sobol réel sur Z",
+       x = NULL, y = "Valeur de l'indice", fill = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "bottom",
+        strip.text = element_text(face = "bold"))
+
+p5
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TABLEAU 4 — Qualité de construction du modèle KDE au niveau X → Z
+# ══════════════════════════════════════════════════════════════════════════════
+# On évalue directement la fidélité du modèle de substitution KDE
+# (model_XZ, celui utilisé par shapleyPermRand) par rapport au vrai Z,
+# en prédisant chaque observation par LOO (leave-one-out) pour éviter
+# le biais d'auto-prédiction.
+
+cat("\n════ Diagnostic qualité de construction — modèle KDE(X) vs Z réel ════\n")
+
+Z_hat_loo = numeric(n)
+pct5 = unique(pmax(1L, floor(seq(1, n, length.out = 11))))
+cat("  Prédiction LOO du modèle KDE X→Z ...\n")
+for (i in seq_len(n)) {
+  if (i %in% pct5) cat(round(100 * i / n), "%  ", sep = "")
+  ref = setdiff(seq_len(n), i)
+  w   = K_gauss(U_XZ[i, ], U_XZ[ref, , drop = FALSE], h_XZ_kde)
+  ws  = sum(w)
+  Z_hat_loo[i] = if (ws < 1e-12) mean(Z[ref]) else sum(w * Z[ref]) / ws
+}
+cat("\n")
+
+tau_XZ_kde   = cor(Z, Z_hat_loo, method = "kendall")
+pearson_XZ   = cor(Z, Z_hat_loo, method = "pearson")
+R2_XZ        = 1 - sum((Z - Z_hat_loo)^2) / sum((Z - mean(Z))^2)
+mae_XZ       = mean(abs(Z - Z_hat_loo))
+rel_err_XZ   = mean(abs((Z_hat_loo - Z) / ifelse(Z == 0, NA, Z)), na.rm = TRUE)
+
+Uc_XZ    = pseudo_obs(cbind(Z, Z_hat_loo))
+fit_XZ   = bicop(Uc_XZ, family_set = "parametric", selcrit = "aic")
+tau_cop_XZ = fit_XZ$tau
+if (is.null(tau_cop_XZ) || !is.numeric(tau_cop_XZ))
+  tau_cop_XZ = cor(Uc_XZ[,1], Uc_XZ[,2], method = "kendall")
+
+tab_qualite_XZ = data.frame(
+  Niveau        = "X (16 entrées) → Z",
+  h_bandwidth   = round(h_XZ_kde, 4),
+  tau_Z_Zhat    = round(tau_XZ_kde, 4),
+  pearson       = round(pearson_XZ, 4),
+  R2_LOO        = round(R2_XZ, 4),
+  MAE           = round(mae_XZ, 4),
+  err_rel_moy   = round(rel_err_XZ, 4),
+  copule        = fit_XZ$family,
+  tau_copule    = round(tau_cop_XZ, 4),
+  stringsAsFactors = FALSE
+)
+
+cat("\n══ Tableau 4 — Qualité de construction du modèle KDE (niveau X → Z) ══\n")
+print(t(tab_qualite_XZ), quote = FALSE)
+```
